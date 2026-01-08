@@ -1,0 +1,24 @@
+-- X-Ray 插件配置文件模板
+-- 使用方法：将此文件复制为 config.lua 并填入您的 API 密钥
+
+return {
+    -- Google Gemini API 密钥
+    -- 免费获取：https://makersuite.google.com/app/apikey
+    gemini_api_key = "",
+    
+    -- Gemini 模型选择
+    -- 可选："gemini-flash-lite-latest"、"gemini-2.5-pro"、"gemini-3.0-preview"
+    gemini_model = "gemini-flash-lite-latest",
+    
+    -- ChatGPT API 密钥
+    -- 获取地址：https://platform.openai.com/api-keys
+    chatgpt_api_key = "",
+    
+    -- 本地 AI 设置（OpenAI 兼容接口）
+    local_endpoint = "http://localhost:8080/v1/chat/completions",
+    local_model = "your-model-name",
+    local_api_key = "",
+    
+    -- 默认 AI 提供商："gemini"、"chatgpt" 或 "local"
+    default_provider = "gemini",
+}

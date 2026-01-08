@@ -2,6 +2,7 @@
 local lfs = require("libs/libkoreader-lfs")
 local logger = require("logger")
 local DocSettings = require("docsettings")
+local json = require("json")
 
 local CacheManager = {}
 
@@ -142,15 +143,7 @@ function CacheManager:loadCache(book_path)
         return nil
     end
     
-    -- Cache age check removed - cache is now永久 (永久 = permanent)
-    -- Cache will stay valid forever unless manually cleared
-    
     logger.info("CacheManager: Loaded cache from:", cache_file)
-    if data.cached_at then
-        local cache_age_days = math.floor((os.time() - data.cached_at) / 86400)
-        logger.info("CacheManager: Cache age:", cache_age_days, "days (no expiration)")
-    end
-    
     return data
 end
 
@@ -200,19 +193,174 @@ function CacheManager:serialize(obj, indent, seen)
     end
 end
 
--- Clear cache for a book
+-- Clear cache for a book (includes main cache and all percentage-based caches)
 function CacheManager:clearCache(book_path)
+    local cleared = false
+    
+    -- Clear main cache file
     local cache_file = self:getCachePath(book_path)
     if cache_file then
         local success, err = os.remove(cache_file)
         if success then
-            logger.info("CacheManager: Cleared cache:", cache_file)
-            return true
+            logger.info("CacheManager: Cleared main cache:", cache_file)
+            cleared = true
         else
-            logger.warn("CacheManager: Failed to clear cache:", err or "unknown")
-            return false
+            logger.warn("CacheManager: Failed to clear main cache:", err or "unknown")
         end
     end
+    
+    -- Clear all percentage-based caches (xx%.json files)
+    local analysis_dir = self:getAnalysisCacheDir(book_path)
+    if analysis_dir and lfs.attributes(analysis_dir) then
+        for file in lfs.dir(analysis_dir) do
+            if file:match("^%d+%%%.json$") then
+                local filepath = analysis_dir .. "/" .. file
+                local success, err = os.remove(filepath)
+                if success then
+                    logger.info("CacheManager: Cleared analysis cache:", file)
+                    cleared = true
+                else
+                    logger.warn("CacheManager: Failed to clear:", file, err or "")
+                end
+            end
+        end
+        -- Try to remove the directory if empty
+        pcall(function() lfs.rmdir(analysis_dir) end)
+    end
+    
+    return cleared
+end
+
+-- Percentage-Based Analysis Cache Methods
+
+function CacheManager:getAnalysisCacheDir(book_path)
+    if not book_path then return nil end
+    local sdr = DocSettings:getSidecarDir(book_path)
+    return sdr .. "/xray_analysis"
+end
+
+-- Returns sorted list of {percent, filepath}
+function CacheManager:getAvailableCaches(book_path)
+    local dir = self:getAnalysisCacheDir(book_path)
+    if not dir then return {} end
+    
+    -- Check if directory exists before iterating
+    if not lfs.attributes(dir) then
+        return {}
+    end
+    
+    local caches = {}
+    for file in lfs.dir(dir) do
+        local percent = file:match("^(%d+)%%%.json$")
+        if percent then
+            table.insert(caches, {
+                percent = tonumber(percent),
+                path = dir .. "/" .. file
+            })
+        end
+    end
+    
+    -- Sort by percentage ascending
+    table.sort(caches, function(a, b) return a.percent < b.percent end)
+    
+    return caches
+end
+
+-- Validate if analysis data is empty
+function CacheManager:isValidAnalysis(content)
+    if not content or content == "" then return false end
+    
+    local success, data = pcall(json.decode, content)
+    if not success or not data then return false end
+    
+    -- Check for meaningful data
+    local has_data = false
+    
+    local keys_to_check = {"characters", "locations", "themes", "events"}
+    for _, key in ipairs(keys_to_check) do
+        if data[key] and next(data[key]) then
+            has_data = true
+            break
+        end
+    end
+    
+    return has_data
+end
+
+
+
+function CacheManager:getNearestPartialCache(book_path, target_percent)
+    local caches = self:getAvailableCaches(book_path)
+    if #caches == 0 then return nil end
+    
+    -- Filter candidates <= target_percent
+    local candidates = {}
+    for _, cache in ipairs(caches) do
+         if cache.percent <= target_percent then
+             table.insert(candidates, cache)
+         end
+    end
+    
+    -- Sort candidates descending (best fit first)
+    table.sort(candidates, function(a, b) return a.percent > b.percent end)
+    
+    -- Iterate candidates to find first non-empty one
+    for _, candidate in ipairs(candidates) do
+        local content = self:getAnalysis(book_path, candidate.percent)
+        if self:isValidAnalysis(content) then
+            -- Load content meta
+            local attr = lfs.attributes(candidate.path)
+            if attr then
+                candidate.mtime = attr.modification
+            end
+            candidate.content = content
+            logger.info("CacheManager: Found valid partial cache at " .. candidate.percent .. "%")
+            return candidate
+        else
+            logger.info("CacheManager: Skipping empty/invalid partial cache at " .. candidate.percent .. "%")
+        end
+    end
+    
+    return nil
+end
+
+function CacheManager:getAnalysis(book_path, percent)
+    local dir = self:getAnalysisCacheDir(book_path)
+    if not dir then return nil end
+    
+    local file = string.format("%s/%d%%.json", dir, percent)
+    local f = io.open(file, "r")
+    if not f then return nil end
+    
+    local content = f:read("*a")
+    f:close()
+    
+    -- It's stored as raw JSON, so just return it
+    if content and #content > 0 then
+        return content
+    end
+    return nil
+end
+
+function CacheManager:saveAnalysis(book_path, percent, json_content)
+    local dir = self:getAnalysisCacheDir(book_path)
+    if not dir then return false end
+    
+    -- Ensure dir exists
+    if not self:ensureDirectory(dir .. "/dummy_file") then
+        return false
+    end
+    
+    local file = string.format("%s/%d%%.json", dir, percent)
+    local f = io.open(file, "w")
+    if f then
+        f:write(json_content)
+        f:close()
+        logger.info("CacheManager: Saved analysis for " .. percent .. "%")
+        return true
+    end
+    
+    logger.warn("CacheManager: Failed to save analysis for " .. percent .. "%")
     return false
 end
 

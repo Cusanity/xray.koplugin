@@ -1,0 +1,14 @@
+# User configuration (contains API keys)
+config.lua
+
+# Cache and temporary files
+*.log
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
