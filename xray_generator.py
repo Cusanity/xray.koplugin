@@ -27,242 +27,130 @@ from openai import OpenAI
 
 # === Configuration ===
 # Override via environment variables or edit directly
-API_BASE_URL = os.environ.get("XRAY_API_BASE", "http://localhost:8080/v1")
-API_KEY = os.environ.get("XRAY_API_KEY", "your-api-key")
+API_BASE_URL = os.environ.get("XRAY_API_BASE", "http://127.0.0.1:8045/v1")
+API_KEY = os.environ.get("XRAY_API_KEY", "sk-e80a5d77e693448cadce981aa5b752de")
 MODEL_NAME = os.environ.get("XRAY_MODEL", "gemini-2.5-flash-lite")
 MAX_TOKENS = 128000
 
 TEMPERATURE = 0.4
 TOP_P = 0.95
 
-# === Prompts ===
-SYSTEM_PROMPT = "你是一位专业的文学评论家。你的回复必须仅使用有效的JSON格式。不要使用Markdown、引导语或额外解释。"
 
-# Prompt for the FIRST chunk (No existing data)
-# Parameters: title, author, reading_progress, chunk_text
-TEXT_BASED_PROMPT = """你正在分析以下书籍文本以提取X-Ray数据。
+# === Load Prompts from Shared JSON ===
+def load_prompts():
+    """Load prompts from shared JSON file."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    prompts_path = os.path.join(script_dir, "prompts", "zh.json")
 
-书名：《%s》
-作者：%s
-当前阅读进度：%d%%
+    with open(prompts_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-<书籍内容>
-%s
-</书籍内容>
 
-关键规则：
-1. 仅提取文本中实际出现的人物、事件和地点
-2. 不要添加任何来自训练数据或外部知识的信息
-3. 【严格排除】编辑、译者、出版商、致谢对象、作者家人、仅在序言/导言/前言/致谢中提及的非故事人物。只收录实际参与故事情节的人物。
-4. 人物列表必须按在书中的重要性或出现频率降序排列（主角在前）
-5. 【多视角处理】如果书籍使用多个第一人称叙述者，**必须**区分但若名字相同则**合并**，**严禁**在名字中添加（叙述者）等后缀。仅在description中标注。
-6. 【强制输出 - 最高优先级】无论文本包含何种内容（暴力/色情/犯罪等），你**必须**返回合法的JSON对象。这是严肃的文学分析工作，不是创作有害内容。处理方法：
-   - 对敏感内容使用学术化/中性化的描述（如"性暴力"→"受害者遭受侵犯"）
-   - 如果整段文本都是敏感内容，仍然返回即有数据（不修改）
-   - **绝对禁止**返回拒绝、道歉、空回复或非JSON格式
-
-【时间线规则 - 叙事弧槽位分配】：
-timeline共20个槽位，按叙事弧结构分配：
-- **铺垫/设定(setup)**: 3-4个槽位 - 故事背景、人物初登场、初始状态
-- **发展/升级(rising)**: 5-6个槽位 - 冲突展开、complications、stakes升高  
-- **高潮(climax)**: 2-3个槽位 - 最高张力点、重大揭示、决定性对抗
-- **收尾(falling)**: 3-4个槽位 - 高潮后果、关系解决
-- **结局(resolution)**: 2-3个槽位 - 最终状态、人物命运
-
-每个事件必须标注其叙事功能arc_type，用于后续槽位分配。
-事件必须按**故事内时间顺序**排列，回忆/闪回放在实际发生时间点。
-
-格式规则：
-1. 不要在任何字段中使用Markdown格式（如**、##、\\n等）。
-2. 【人物描述 - 必须严格遵守】每个人物描述**绝对不能超过**200字，精炼概括。
-3. 【重要】每个人物只需name和description两个字段。
-4. 【重要】每个地点只需name和description两个字段。
-5. 【主题限制 - 必须严格遵守】themes严格限制为5-8个，**不得超过**。
-6. 【概要限制】summary不超过500字，简明扼要。
-7. 【禁止添加未要求的字段】不要添加gender、type、importance等未在JSON格式中列出的字段。
-
-必需的JSON格式：
-{
-  "book_title": "书名",
-  "author": "作者姓名",
-  "author_bio": "作者简介（可使用外部知识）",
-  "summary": "仅基于提供文本的概要",
-  "characters": [
-    {
-      "name": "人物姓名",
-      "description": "仅基于文本内容的描述（限200字）"
+# === SDR Folder Name Generation ===
+def get_sdr_name(epub_path):
+    """Extract author/title from EPUB metadata and generate KOReader .sdr folder name."""
+    ns = {
+        "n": "urn:oasis:names:tc:opendocument:xmlns:container",
     }
-  ],
-  "locations": [
-    {
-      "name": "地点名称",
-      "description": "如文本所述"
-    }
-  ],
-  "themes": ["主题1", "主题2", "主题3"],
-  "pending_events": [
-    {
-      "event": "事件描述",
-      "arc_type": "setup|rising|climax|falling|resolution",
-      "book_position_pct": 5
-    }
-  ],
-  "timeline": []
-}"""
+
+    with zipfile.ZipFile(epub_path) as z:
+        # Find OPF file
+        container = z.read("META-INF/container.xml")
+        root = ET.fromstring(container)
+        opf_path = root.find(".//n:rootfile", ns).attrib["full-path"]
+
+        # Read OPF metadata
+        opf_data = z.read(opf_path)
+        opf_root = ET.fromstring(opf_data)
+
+        metadata = opf_root.find(".//{http://www.idpf.org/2007/opf}metadata")
+
+        title = "Unknown"
+        author = "Unknown"
+
+        if metadata is not None:
+            t = metadata.find(".//{http://purl.org/dc/elements/1.1/}title")
+            c = metadata.find(".//{http://purl.org/dc/elements/1.1/}creator")
+            if t is not None and t.text:
+                title = t.text
+            if c is not None and c.text:
+                author = c.text
+
+    # Sanitize for filesystem
+    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title)
+    safe_author = re.sub(r'[<>:"/\\|?*]', "_", author)
+
+    return f"{safe_author} - {safe_title}.epub.sdr"
 
 
-# Prompt for SUBSEQUENT chunks (Incremental update with soft commit)
-# Parameters: title, author, reading_progress, existing_json, chunk_text, progress, progress
-INCREMENTAL_PROMPT = """你正在进行分块书籍分析。请基于新的文本片段更新现有的JSON数据。
+PROMPTS = load_prompts()
 
-书名：《%s》
-作者：%s
-当前阅读进度：%d%%
+SYSTEM_PROMPT = PROMPTS["system_instruction"]
+TEXT_BASED_PROMPT = PROMPTS["text_based"]
+INCREMENTAL_PROMPT = PROMPTS["incremental"]
+TIMELINE_CURATION_PROMPT = PROMPTS["timeline_curation"]
+TIMELINE_CONSOLIDATION_PROMPT = PROMPTS["timeline_consolidation"]
 
-<即有数据>
-%s
-</即有数据>
-
-<新文本片段>
-%s
-</新文本片段>
-
-核心任务：
-1. 分析新文本，提取新的人物、地点、事件。
-2. 将新信息合并到"即有数据"中。
-3. 严格排除编辑、译者、致谢对象等非故事人物。
-4. 保持人物列表按重要性排序（主角在前）。
-5. 更新summary以包含新内容（无痕融合）。
-6. 【多视角处理】如名字相同则合并，不创建带后缀的新人物。
-7. 【强制输出】必须返回合法JSON，对敏感内容使用学术化描述。
-
-【时间线 - 软提交策略】：
-系统采用pending_events缓冲区 + timeline正式区的双层结构：
-
-**pending_events（待定事件缓冲区）**：
-- 从新文本提取的事件首先进入pending_events
-- 每个事件包含: event(描述), arc_type(叙事弧类型), book_position_pct(**必须使用当前阅读进度%d%%**)
-- arc_type可选值: setup(铺垫), rising(发展), climax(高潮), falling(收尾), resolution(结局)
-
-**timeline（正式时间线）**：
-- 当pending_events累积≥5条 或 遇到major事件时，执行"软提交"
-- 软提交规则：
-  1. 将pending_events中的major事件提交到timeline
-  2. 根据叙事弧槽位配额决定是否提交minor事件
-  3. 槽位配额: setup(3-4), rising(5-6), climax(2-3), falling(3-4), resolution(2-3)
-  4. 若某arc_type槽位已满，新事件应替换该类型中importance较低的事件
-  5. 提交后清空pending_events中已提交的事件
-
-**当前进度：%d%%**
-- 若进度<30%%: 主要产生setup和rising事件，timeline保守提交
-- 若30%%≤进度<70%%: 可能出现climax事件，适度提交
-- 若进度≥70%%: 开始出现falling和resolution事件，积极提交
-
-【timeline事件格式】：
-{
-  "sequence": N,
-  "event": "事件描述",
-  "arc_type": "setup|rising|climax|falling|resolution"
-}
-
-timeline必须按**故事内时间顺序**排列，sequence从1连续编号，最多20条。
-
-【关键合并规则】：
-- 名字字段禁止包含括号或后缀，使用最纯粹的姓名
-- 同名人物/地点必须合并，不能创建重复条目
-- 【人物描述 - 必须严格遵守】每个人物描述**绝对不能超过**200字，超出时必须精简
-
-【主题压缩】：
-- 【主题限制 - 必须严格遵守】themes严格限制为5-8个，**不得超过**
-- 若themes超过8个，必须合并最相似的主题直到≤8个
-
-【去重与无痕合并】：
-- 禁用词汇："新文本"、"新片段"、"新增"、"新情节中"等
-- 合并后内容必须读起来像从头撰写，无拼接痕迹
-- 删除所有重复句子，只保留最完整版本
-
-【概要限制】summary不超过500字，简明扼要。
-
-【禁止添加未要求的字段】不要添加gender、type、importance等未在JSON格式中列出的字段。
-
-返回合并后的完整JSON：
-{
-  "book_title": "书名",
-  "author": "作者",
-  "author_bio": "...",
-  "summary": "更新后的概要（无分块痕迹）",
-  "characters": [...],
-  "locations": [...],
-  "themes": [...],
-  "pending_events": [
-    {
-      "event": "待提交事件",
-      "arc_type": "rising",
-      "book_position_pct": 45
-    }
-  ],
-  "timeline": [
-    {
-      "sequence": 1,
-      "event": "已提交事件（按故事时序）",
-      "arc_type": "setup"
-    }
-  ]
-}"""
+# Global client reference for curation (set in main)
+_ai_client = None
+_book_title = None
+_current_pct = 0
 
 
-# Prompt for final timeline curation at 100%
-# Parameters: title, pending_events_json, timeline_json
-TIMELINE_CURATION_PROMPT = """你是一位专业的文学编辑，正在为《%s》整理最终的时间线。
+# === Text Sanitization Patterns ===
+# Remove phrases that indicate incremental processing
+INCREMENTAL_MARKERS = [
+    # Ordered by length (longest first) to prevent partial matches
+    "在新文本中，",
+    "在新文本中",
+    "新文本中，",
+    "新文本中",
+    "在新片段中",
+    "在本段中，",
+    "在本段中",
+    "在此段中",
+    "新情节中",
+    "新文本",
+    "新片段",
+]
 
-<待定事件>
-%s
-</待定事件>
 
-<当前时间线>
-%s
-</当前时间线>
-
-任务：将所有待定事件整合到时间线中，生成最终的20条精华时间线。
-
-【叙事弧槽位分配】（共20条）：
-- setup(铺垫): 3-4条 - 故事开端、人物登场、初始状态
-- rising(发展): 5-6条 - 冲突展开、复杂化、stakes升高
-- climax(高潮): 2-3条 - 最高张力、重大揭示、决战
-- falling(收尾): 3-4条 - 高潮后果、关系变化
-- resolution(结局): 2-3条 - 最终状态、人物命运
-
-【整理规则】：
-1. 优先保留major事件，minor事件根据槽位余量决定
-2. 合并描述同一事件的重复条目
-3. 按故事内时间顺序排列（非阅读顺序）
-4. 确保叙事弧完整：从setup到resolution形成完整故事线
-5. 事件描述应简洁有力，每条不超过50字
-
-返回最终timeline的JSON数组：
-[
-  {
-    "sequence": 1,
-    "event": "精炼的事件描述",
-    "arc_type": "setup"
-  },
-  ...
-]"""
+def sanitize_text(text):
+    """Remove incremental processing markers from text."""
+    if not isinstance(text, str):
+        return text
+    for marker in INCREMENTAL_MARKERS:
+        text = text.replace(marker, "")
+    # Clean up any resulting double spaces or punctuation issues
+    text = re.sub(r"，，+", "，", text)
+    text = re.sub(r"。。+", "。", text)
+    text = re.sub(r"  +", " ", text)
+    return text.strip()
 
 
 # === Data Cleanup Function ===
 def cleanup_data(data, current_pct):
     """Remove unrequested fields and enforce limits after AI response"""
-    # Remove gender from characters
+
+    # Sanitize summary
+    if "summary" in data:
+        data["summary"] = sanitize_text(data["summary"])
+
+    # Remove gender from characters and sanitize descriptions
     for char in data.get("characters", []):
         char.pop("gender", None)
+        if "description" in char:
+            char["description"] = sanitize_text(char["description"])
         # Truncate description to 200 chars if needed
-        if "description" in char and len(char["description"]) > 200:
-            char["description"] = char["description"][:197] + "..."
+    # Cap character list to 50 items (safety net)
+    if len(data.get("characters", [])) > 50:
+        data["characters"] = data["characters"][:50]
 
-    # Remove type from locations
+    # Remove type from locations and sanitize descriptions
     for loc in data.get("locations", []):
         loc.pop("type", None)
+        if "description" in loc:
+            loc["description"] = sanitize_text(loc["description"])
 
     # Remove unrequested fields from timeline
     for event in data.get("timeline", []):
@@ -287,11 +175,119 @@ def cleanup_data(data, current_pct):
     if len(data.get("themes", [])) > 8:
         data["themes"] = data["themes"][:8]
 
-    # Truncate summary to 500 chars if needed
-    if "summary" in data and len(data["summary"]) > 500:
-        data["summary"] = data["summary"][:497] + "..."
+    # === ENFORCE TIMELINE LIMIT (max 20) via AI Curation ===
+    timeline = data.get("timeline", [])
+    if len(timeline) > 20:
+        print(
+            f"  [Curation] Timeline has {len(timeline)} entries, asking AI to consolidate..."
+        )
+        curated = curate_timeline_with_ai(timeline, data.get("pending_events", []))
+        if curated and len(curated) <= 20:
+            data["timeline"] = curated
+            print(f"  [Curation] Timeline consolidated to {len(curated)} entries")
+        else:
+            # Fallback: naive priority-based truncation
+            print(
+                f"  [Curation] AI curation failed or still too long, using fallback truncation"
+            )
+            arc_priority = {
+                "climax": 0,
+                "resolution": 1,
+                "falling": 2,
+                "setup": 3,
+                "rising": 4,
+            }
+
+            def sort_key(event):
+                arc = event.get("arc_type", "rising")
+                priority = arc_priority.get(arc, 4)
+                seq = event.get("sequence", 0)
+                if priority >= 3:
+                    return (priority, -seq)
+                return (priority, seq)
+
+            sorted_timeline = sorted(timeline, key=sort_key)
+            kept = sorted_timeline[:20]
+            kept.sort(key=lambda e: e.get("sequence", 0))
+            for i, event in enumerate(kept):
+                event["sequence"] = i + 1
+            data["timeline"] = kept
+            print(f"  [Cleanup] Timeline truncated to 20 entries")
+
+    # === ENFORCE PENDING_EVENTS LIMIT (max 10) ===
+    pending = data.get("pending_events", [])
+    if len(pending) > 10:
+        # Keep most recent (highest book_position_pct)
+        pending.sort(key=lambda e: e.get("book_position_pct", 0), reverse=True)
+        data["pending_events"] = pending[:10]
+        print(f"  [Cleanup] Pending events truncated from {len(pending)} to 10 entries")
+
+    # Removed naive truncation for summary
+    # if "summary" in data and len(data["summary"]) > 500:
+    #    data["summary"] = data["summary"][:497] + "..."
 
     return data
+
+
+# === AI Timeline Curation ===
+def curate_timeline_with_ai(timeline, pending_events=None):
+    """Ask AI to consolidate and merge timeline events to stay within limit."""
+    global _ai_client, _book_title, _current_pct
+
+    if _ai_client is None or _book_title is None:
+        return None
+
+    timeline_count = len(timeline)
+    if timeline_count <= 20:
+        return timeline
+
+    timeline_json = json.dumps(timeline, ensure_ascii=False)
+
+    # Use the consolidation prompt which has specific merge examples
+    # Format: title, progress_pct, timeline_count, timeline_json
+    consolidation_prompt = TIMELINE_CONSOLIDATION_PROMPT % (
+        _book_title,
+        _current_pct,
+        timeline_count,
+        timeline_json,
+    )
+
+    try:
+        response = _ai_client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": consolidation_prompt},
+            ],
+            temperature=TEMPERATURE,
+            top_p=TOP_P,
+            max_tokens=MAX_TOKENS,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        if content:
+            content = content.replace("```json", "").replace("```", "").strip()
+            curated_result = json.loads(content)
+
+            # Handle both array and object responses
+            if isinstance(curated_result, list):
+                curated_timeline = curated_result
+            elif isinstance(curated_result, dict) and "timeline" in curated_result:
+                curated_timeline = curated_result["timeline"]
+            else:
+                return None
+
+            # Renumber sequences
+            for i, event in enumerate(curated_timeline):
+                event["sequence"] = i + 1
+
+            return curated_timeline
+    except Exception as e:
+        print(f"  [Curation] AI curation error: {e}")
+        return None
+
+    return None
 
 
 # === EPUB Reader Class ===
@@ -419,13 +415,13 @@ def main():
     print(f"Total text length: {len(full_text)} characters")
     print(f"Book Title: {title}")
 
-    # Create Output Directory
-    # Sanitize title for filesystem
-    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip()
-    if not safe_title:
-        safe_title = "output"
+    # Create Output Directory inside xray.koplugin/xray/
+    # Use SDR naming convention: "Author - Title.epub.sdr"
+    sdr_name = get_sdr_name(target_path)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    xray_base_dir = os.path.join(script_dir, "xray")
+    output_dir = os.path.join(xray_base_dir, sdr_name, "xray_analysis")
 
-    output_dir = os.path.join(os.getcwd(), safe_title)
     if not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir)
@@ -435,9 +431,23 @@ def main():
             return
     else:
         print(f"Using output directory: {output_dir}")
+        # Cleanup old partial analysis files to ensure a fresh start
+        print("Cleaning up old analysis files...")
+        for filename in os.listdir(output_dir):
+            if filename.endswith(".json") and "%" in filename:
+                try:
+                    os.remove(os.path.join(output_dir, filename))
+                    print(f"Deleted {filename}")
+                except OSError as e:
+                    print(f"Error deleting {filename}: {e}")
 
     # Initialize OpenAI Client
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+
+    # Set global references for AI curation during cleanup
+    global _ai_client, _book_title, _current_pct
+    _ai_client = client
+    _book_title = title
 
     # Chunking Logic (fixed 10k character chunks, but minimum 10 chunks for small books)
     MIN_CHUNKS = 10
@@ -504,7 +514,7 @@ def main():
             # First Chunk - params: title, author, reading_progress, chunk_text
             prompt = TEXT_BASED_PROMPT % (title, author, pct, chunk_text)
         else:
-            # Incremental - params: title, author, reading_progress, existing_json, chunk_text, progress_again
+            # Incremental - params: title, author, reading_progress, existing_json, chunk_text, final_progress
             existing_json = json.dumps(current_data, ensure_ascii=False)
             prompt = INCREMENTAL_PROMPT % (
                 title,
@@ -512,8 +522,7 @@ def main():
                 pct,
                 existing_json,
                 chunk_text,
-                pct,  # for the book_position_pct description
-                pct,  # for the "当前进度" section
+                pct,
             )
 
         # Retry Loop
@@ -548,6 +557,8 @@ def main():
 
                 try:
                     new_data = json.loads(content)
+                    # Set global progress for consolidation prompt
+                    _current_pct = pct
                     # Clean up unrequested fields and enforce limits
                     new_data = cleanup_data(new_data, pct)
                     current_data = new_data

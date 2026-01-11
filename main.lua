@@ -148,17 +148,12 @@ function XRayPlugin:init()
     -- CSS for HTML viewer
     self.css = [[
         @page { margin: 0; }
-        body { margin: 0; padding: 0.5em; font-family: 'Noto Sans', sans-serif; line-height: 1.4; }
-        h1, h2, h3 { margin-top: 0.5em; margin-bottom: 0.3em; font-weight: bold; border-bottom: 1px solid #ccc; padding-bottom: 0.2em; }
+        body { margin: 0; padding: 0.5em; }
+        h1, h2, h3 { margin-top: 0.5em; margin-bottom: 0.3em; font-weight: bold; }
         h1 { font-size: 1.4em; }
         h2 { font-size: 1.25em; }
         h3 { font-size: 1.1em; }
-        p { margin: 0.5em 0; text-align: justify; }
-        b, strong { font-weight: bold; }
-        ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
-        li { margin-bottom: 0.2em; }
-        .label { font-weight: bold; color: #444; }
-        .dim { color: #666; font-size: 0.9em; font-style: italic; }
+        b, strong, em, i { font-weight: normal; font-style: normal; }
     ]]
     self.ui.menu:registerToMainMenu(self)
     
