@@ -13,3 +13,4 @@ config.lua
 .DS_Store
 Thumbs.db
 *.json
+__pycache__
