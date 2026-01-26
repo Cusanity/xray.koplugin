@@ -464,13 +464,16 @@ function AIHelper:processTextRange(title, author, config, book_text, target_perc
             local prompt
             if not current_data then
                  -- No previous data (starting from 0%)
-                 prompt = self:createPrompt(title, author, nil, chunk)
+                 -- Pass context with reading_percent for text_based prompt
+                 local ctx = { reading_percent = current_percent_marker }
+                 prompt = self:createPrompt(title, author, ctx, chunk)
             else
                  -- Has previous data (from cache or previous chunk)
                  logger.info("AIHelper: Encoding current_data for incremental prompt")
                  local json_data = json.encode(current_data)
                  logger.info("AIHelper: Encoded data length:", #json_data)
-                 prompt = string.format(self.prompts.incremental, title, author, json_data, chunk)
+                 -- Format: title, author, reading_pct, existing_json, chunk_text, reading_pct
+                 prompt = string.format(self.prompts.incremental, title, author, current_percent_marker, json_data, chunk, current_percent_marker)
             end
             
             logger.info("AIHelper: Calling API for chunk", chunk_idx)
@@ -489,6 +492,17 @@ function AIHelper:processTextRange(title, author, config, book_text, target_perc
                  logger.info("AIHelper: API Success for chunk", chunk_idx)
                  current_data = data
                  
+                 -- Timeline consolidation: if >20 entries, ask AI to merge
+                 if current_data.timeline and #current_data.timeline > 20 then
+                     logger.info("AIHelper: Timeline has", #current_data.timeline, "entries, consolidating...")
+                     current_data.timeline = self:consolidateTimeline(
+                         current_data.timeline,
+                         title,
+                         current_percent_marker,
+                         config
+                     )
+                 end
+                 
                  if book_path then
                      -- Align to percentage
                      logger.info("AIHelper: Saving intermediate cache for", current_percent_marker, "%")
@@ -502,6 +516,18 @@ function AIHelper:processTextRange(title, author, config, book_text, target_perc
                      UIManager:scheduleIn(0.1, process_next_chunk)
                  else
                      logger.info("AIHelper: Delta analysis complete")
+                     
+                     -- Final timeline curation at 100%: merge pending_events into timeline
+                     if target_percent >= 100 and current_data.pending_events and #current_data.pending_events > 0 then
+                         logger.info("AIHelper: Running final timeline curation")
+                         current_data.timeline, current_data.pending_events = self:curateTimeline(
+                             current_data.timeline or {},
+                             current_data.pending_events,
+                             title,
+                             config
+                         )
+                     end
+                     
                      if on_complete then 
                          current_data.analysis_progress = target_percent 
                          on_complete(current_data) 
@@ -598,34 +624,140 @@ function AIHelper:loadPrompts()
 end
 
 -- Create prompt
--- book_text: optional full text of the book for text-based analysis
+-- book_text: required for text-based analysis
 function AIHelper:createPrompt(title, author, context, book_text)
     if not self.prompts then self:loadLanguage() end
     
-    -- If book_text is provided, use text_based prompt (most accurate)
+    -- Use text_based prompt (the only analysis prompt in zh.json)
     if book_text and #book_text > 100 then
-        local template = self.prompts.text_based or self.prompts.main
+        local template = self.prompts.text_based
+        if not template then
+            logger.error("AIHelper: text_based prompt not found!")
+            return nil
+        end
         -- Truncate if too long (centralized limit)
         local MAX_CHARS = 100000000
         if #book_text > MAX_CHARS then
             book_text = string.sub(book_text, 1, MAX_CHARS)
             logger.info("AIHelper: Truncated book text to", MAX_CHARS, "characters")
         end
-        return string.format(template, title, author or "Unknown", book_text)
-    -- Spoiler-free mode (legacy, less accurate)
-    elseif context and context.spoiler_free then
-        local template = self.prompts.spoiler_free or self.prompts.main
-        return string.format(template, title, author or "Unknown", context.reading_percent)
+        -- Format: title, author, reading_percent, book_text
+        local reading_pct = context and context.reading_percent or 100
+        return string.format(template, title, author or "Unknown", reading_pct, book_text)
     else
-        -- Full book mode (legacy, uses only title)
-        local template = self.prompts.main
-        return string.format(template, title, author or "Unknown")
+        logger.warn("AIHelper: createPrompt called without sufficient book_text")
+        return nil
     end
 end
 
 function AIHelper:getFallbackStrings()
     if not self.prompts then self:loadPrompts() end
     return self.prompts.fallback or {}
+end
+
+-- Timeline Consolidation: Called when timeline exceeds 20 entries
+-- Uses the timeline_consolidation prompt to ask AI to merge/reduce entries
+function AIHelper:consolidateTimeline(timeline, book_title, reading_pct, provider_config)
+    if not self.prompts then self:loadLanguage() end
+    
+    local timeline_count = #timeline
+    if timeline_count <= 20 then
+        return timeline  -- No consolidation needed
+    end
+    
+    local template = self.prompts.timeline_consolidation
+    if not template then
+        logger.warn("AIHelper: timeline_consolidation prompt not found, falling back to truncation")
+        -- Naive fallback: keep first 20
+        local truncated = {}
+        for i = 1, 20 do
+            truncated[i] = timeline[i]
+            truncated[i].sequence = i
+        end
+        return truncated
+    end
+    
+    logger.info("AIHelper: Consolidating timeline from", timeline_count, "to <=20 entries")
+    
+    local timeline_json = json.encode(timeline)
+    -- Format: title, reading_pct, timeline_count, timeline_json
+    local prompt = string.format(template, book_title or "Unknown", reading_pct or 100, timeline_count, timeline_json)
+    
+    local result = self:callAIForTimeline(prompt, provider_config)
+    if result and result.timeline and #result.timeline <= 20 then
+        -- Renumber sequences
+        for i, event in ipairs(result.timeline) do
+            event.sequence = i
+        end
+        return result.timeline
+    end
+    
+    -- Fallback to naive truncation
+    logger.warn("AIHelper: AI consolidation failed, using fallback truncation")
+    local truncated = {}
+    for i = 1, 20 do
+        truncated[i] = timeline[i]
+        truncated[i].sequence = i
+    end
+    return truncated
+end
+
+-- Timeline Curation: Called at 100% completion to finalize timeline
+-- Uses the timeline_curation prompt to merge pending_events into final timeline
+function AIHelper:curateTimeline(timeline, pending_events, book_title, provider_config)
+    if not self.prompts then self:loadLanguage() end
+    
+    if not pending_events or #pending_events == 0 then
+        logger.info("AIHelper: No pending events to curate")
+        return timeline, {}
+    end
+    
+    local template = self.prompts.timeline_curation
+    if not template then
+        logger.warn("AIHelper: timeline_curation prompt not found, skipping curation")
+        return timeline, pending_events
+    end
+    
+    logger.info("AIHelper: Curating final timeline with", #pending_events, "pending events")
+    
+    local pending_json = json.encode(pending_events)
+    local timeline_json = json.encode(timeline or {})
+    -- Format: title, pending_events_json, timeline_json
+    local prompt = string.format(template, book_title or "Unknown", pending_json, timeline_json)
+    
+    local result = self:callAIForTimeline(prompt, provider_config)
+    if result and result.timeline then
+        -- Renumber sequences
+        for i, event in ipairs(result.timeline) do
+            event.sequence = i
+        end
+        return result.timeline, {}  -- Clear pending events
+    end
+    
+    -- Fallback: return original
+    logger.warn("AIHelper: AI curation failed, keeping original timeline")
+    return timeline, pending_events
+end
+
+-- Generic AI call for timeline-related prompts (consolidation/curation)
+function AIHelper:callAIForTimeline(prompt, provider_config)
+    if not provider_config or not provider_config.api_key then
+        logger.error("AIHelper: No provider config for timeline AI call")
+        return nil
+    end
+    
+    local provider_type = provider_config.type or "gemini"
+    local data, err_code, err_msg
+    
+    if provider_type == "local" then
+        data, err_code, err_msg = self:callLocalAI(prompt, provider_config)
+    elseif provider_type == "chatgpt" then
+        data, err_code, err_msg = self:callChatGPT(prompt, provider_config)
+    else
+        data, err_code, err_msg = self:callGemini(prompt, provider_config)
+    end
+    
+    return data
 end
 
 -- Call Google Gemini API (FIXED VERSION)
