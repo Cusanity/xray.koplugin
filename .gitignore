@@ -12,3 +12,6 @@ config.lua
 # OS
 .DS_Store
 Thumbs.db
+xray/
+__pycache__
+
