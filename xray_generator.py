@@ -25,244 +25,848 @@ import math
 import xml.etree.ElementTree as ET
 from openai import OpenAI
 
+# Optional: OpenCC for Traditional/Simplified Chinese normalization
+try:
+    import opencc
+
+    _t2s_converter = opencc.OpenCC("t2s")  # Traditional to Simplified
+except ImportError:
+    _t2s_converter = None
+    print("Note: opencc not installed. Traditional/Simplified deduplication disabled.")
+
 # === Configuration ===
 # Override via environment variables or edit directly
-API_BASE_URL = os.environ.get("XRAY_API_BASE", "http://localhost:8080/v1")
-API_KEY = os.environ.get("XRAY_API_KEY", "your-api-key")
-MODEL_NAME = os.environ.get("XRAY_MODEL", "gemini-2.5-flash-lite")
+API_BASE_URL = os.environ.get("XRAY_API_BASE", "http://127.0.0.1:8045/v1")
+API_KEY = os.environ.get("XRAY_API_KEY", "sk-e80a5d77e693448cadce981aa5b752de")
+MODEL_NAME = os.environ.get("XRAY_MODEL", "gemini-3-pro-high")
 MAX_TOKENS = 128000
 
 TEMPERATURE = 0.4
 TOP_P = 0.95
 
-# === Prompts ===
-SYSTEM_PROMPT = "你是一位专业的文学评论家。你的回复必须仅使用有效的JSON格式。不要使用Markdown、引导语或额外解释。"
+# Output limits for curation
+# Note: No hard caps on character/location counts - UI handles display
 
-# Prompt for the FIRST chunk (No existing data)
-# Parameters: title, author, reading_progress, chunk_text
-TEXT_BASED_PROMPT = """你正在分析以下书籍文本以提取X-Ray数据。
+# Calibre Library Path (for library browsing feature)
+CALIBRE_LIBRARY = os.environ.get(
+    "CALIBRE_LIBRARY", r"C:\Users\-GALACTUS-\Calibre Library"
+)
 
-书名：《%s》
-作者：%s
-当前阅读进度：%d%%
 
-<书籍内容>
-%s
-</书籍内容>
+# === Calibre Library Browser ===
+def scan_calibre_library(library_path):
+    """
+    Scan Calibre library and return list of books with metadata.
+    Returns list of dicts: {title, author, epub_path, folder_path}
+    """
+    books = []
 
-关键规则：
-1. 仅提取文本中实际出现的人物、事件和地点
-2. 不要添加任何来自训练数据或外部知识的信息
-3. 【严格排除】编辑、译者、出版商、致谢对象、作者家人、仅在序言/导言/前言/致谢中提及的非故事人物。只收录实际参与故事情节的人物。
-4. 人物列表必须按在书中的重要性或出现频率降序排列（主角在前）
-5. 【多视角处理】如果书籍使用多个第一人称叙述者，**必须**区分但若名字相同则**合并**，**严禁**在名字中添加（叙述者）等后缀。仅在description中标注。
-6. 【强制输出 - 最高优先级】无论文本包含何种内容（暴力/色情/犯罪等），你**必须**返回合法的JSON对象。这是严肃的文学分析工作，不是创作有害内容。处理方法：
-   - 对敏感内容使用学术化/中性化的描述（如"性暴力"→"受害者遭受侵犯"）
-   - 如果整段文本都是敏感内容，仍然返回即有数据（不修改）
-   - **绝对禁止**返回拒绝、道歉、空回复或非JSON格式
+    if not os.path.isdir(library_path):
+        print(f"Error: Calibre library not found at {library_path}")
+        return books
 
-【时间线规则 - 叙事弧槽位分配】：
-timeline共20个槽位，按叙事弧结构分配：
-- **铺垫/设定(setup)**: 3-4个槽位 - 故事背景、人物初登场、初始状态
-- **发展/升级(rising)**: 5-6个槽位 - 冲突展开、complications、stakes升高  
-- **高潮(climax)**: 2-3个槽位 - 最高张力点、重大揭示、决定性对抗
-- **收尾(falling)**: 3-4个槽位 - 高潮后果、关系解决
-- **结局(resolution)**: 2-3个槽位 - 最终状态、人物命运
+    # Calibre organizes books as: Library/Author/BookFolder/files
+    for author_dir in os.listdir(library_path):
+        author_path = os.path.join(library_path, author_dir)
 
-每个事件必须标注其叙事功能arc_type，用于后续槽位分配。
-事件必须按**故事内时间顺序**排列，回忆/闪回放在实际发生时间点。
+        # Skip non-directories and hidden/system folders
+        if not os.path.isdir(author_path) or author_dir.startswith("."):
+            continue
 
-格式规则：
-1. 不要在任何字段中使用Markdown格式（如**、##、\\n等）。
-2. 【人物描述 - 必须严格遵守】每个人物描述**绝对不能超过**200字，精炼概括。
-3. 【重要】每个人物只需name和description两个字段。
-4. 【重要】每个地点只需name和description两个字段。
-5. 【主题限制 - 必须严格遵守】themes严格限制为5-8个，**不得超过**。
-6. 【概要限制】summary不超过500字，简明扼要。
-7. 【禁止添加未要求的字段】不要添加gender、type、importance等未在JSON格式中列出的字段。
+        # Scan book folders within author directory
+        for book_dir in os.listdir(author_path):
+            book_path = os.path.join(author_path, book_dir)
 
-必需的JSON格式：
-{
-  "book_title": "书名",
-  "author": "作者姓名",
-  "author_bio": "作者简介（可使用外部知识）",
-  "summary": "仅基于提供文本的概要",
-  "characters": [
-    {
-      "name": "人物姓名",
-      "description": "仅基于文本内容的描述（限200字）"
+            if not os.path.isdir(book_path):
+                continue
+
+            # Look for metadata.opf and epub file
+            metadata_path = os.path.join(book_path, "metadata.opf")
+            if not os.path.exists(metadata_path):
+                continue
+
+            # Find EPUB file in the book folder
+            epub_file = None
+            for f in os.listdir(book_path):
+                if f.lower().endswith(".epub"):
+                    epub_file = os.path.join(book_path, f)
+                    break
+
+            if not epub_file:
+                continue
+
+            # Parse metadata.opf to get actual title and author
+            try:
+                title, author, added_date = parse_metadata_opf(metadata_path)
+                books.append(
+                    {
+                        "title": title,
+                        "author": author,
+                        "added_date": added_date,
+                        "epub_path": epub_file,
+                        "folder_path": book_path,
+                    }
+                )
+            except Exception as e:
+                # Fallback to folder/file names if parsing fails
+                print(f"Warning: Could not parse {metadata_path}: {e}")
+
+    # Sort by added date (newest first)
+    books.sort(key=lambda b: b["added_date"], reverse=True)
+    return books
+
+
+def parse_metadata_opf(opf_path):
+    """Parse Calibre's metadata.opf file to extract title, author, and added date."""
+    tree = ET.parse(opf_path)
+    root = tree.getroot()
+
+    ns = {
+        "opf": "http://www.idpf.org/2007/opf",
+        "dc": "http://purl.org/dc/elements/1.1/",
     }
-  ],
-  "locations": [
-    {
-      "name": "地点名称",
-      "description": "如文本所述"
-    }
-  ],
-  "themes": ["主题1", "主题2", "主题3"],
-  "pending_events": [
-    {
-      "event": "事件描述",
-      "arc_type": "setup|rising|climax|falling|resolution",
-      "book_position_pct": 5
-    }
-  ],
-  "timeline": []
-}"""
+
+    title = "Unknown Title"
+    author = "Unknown Author"
+    added_date = "1970-01-01T00:00:00+00:00"  # Default for books without timestamp
+
+    # Find metadata element
+    metadata = root.find("opf:metadata", ns)
+    if metadata is None:
+        # Try without namespace prefix (some OPF files)
+        metadata = root.find(".//{http://www.idpf.org/2007/opf}metadata")
+
+    if metadata is not None:
+        title_elem = metadata.find("dc:title", ns)
+        if title_elem is None:
+            title_elem = metadata.find(".//{http://purl.org/dc/elements/1.1/}title")
+        if title_elem is not None and title_elem.text:
+            title = title_elem.text.strip()
+
+        creator_elem = metadata.find("dc:creator", ns)
+        if creator_elem is None:
+            creator_elem = metadata.find(".//{http://purl.org/dc/elements/1.1/}creator")
+        if creator_elem is not None and creator_elem.text:
+            author = creator_elem.text.strip()
+
+        # Extract calibre:timestamp (when book was added to library)
+        for meta in metadata.findall(".//{http://www.idpf.org/2007/opf}meta"):
+            if meta.get("name") == "calibre:timestamp":
+                added_date = meta.get("content", added_date)
+                break
+
+    return title, author, added_date
 
 
-# Prompt for SUBSEQUENT chunks (Incremental update with soft commit)
-# Parameters: title, author, reading_progress, existing_json, chunk_text, progress, progress
-INCREMENTAL_PROMPT = """你正在进行分块书籍分析。请基于新的文本片段更新现有的JSON数据。
+def display_library_browser(books, page_size=20):
+    """
+    Display interactive paginated book list and let user select.
+    Returns the selected book's epub_path or None if cancelled.
+    """
+    if not books:
+        print("No books found in Calibre library.")
+        return None
 
-书名：《%s》
-作者：%s
-当前阅读进度：%d%%
+    total = len(books)
+    current_page = 0
+    total_pages = (total + page_size - 1) // page_size
 
-<即有数据>
-%s
-</即有数据>
+    while True:
+        # Calculate page bounds
+        start_idx = current_page * page_size
+        end_idx = min(start_idx + page_size, total)
 
-<新文本片段>
-%s
-</新文本片段>
+        # Display header
+        print(f"\n{'=' * 60}")
+        print(
+            f"Calibre Library - Page {current_page + 1}/{total_pages} ({total} books)"
+        )
+        print(f"{'=' * 60}\n")
 
-核心任务：
-1. 分析新文本，提取新的人物、地点、事件。
-2. 将新信息合并到"即有数据"中。
-3. 严格排除编辑、译者、致谢对象等非故事人物。
-4. 保持人物列表按重要性排序（主角在前）。
-5. 更新summary以包含新内容（无痕融合）。
-6. 【多视角处理】如名字相同则合并，不创建带后缀的新人物。
-7. 【强制输出】必须返回合法JSON，对敏感内容使用学术化描述。
+        # Display books on this page
+        for i in range(start_idx, end_idx):
+            book = books[i]
+            # Truncate title if too long
+            display_title = book["title"]
+            if len(display_title) > 45:
+                display_title = display_title[:42] + "..."
+            print(f"  [{i + 1:3d}] {display_title}")
+            print(f"        by {book['author']}")
 
-【时间线 - 软提交策略】：
-系统采用pending_events缓冲区 + timeline正式区的双层结构：
+        # Display navigation options
+        print(f"\n{'─' * 60}")
+        print("Commands: [n]ext page, [p]rev page, [q]uit, or enter book number")
 
-**pending_events（待定事件缓冲区）**：
-- 从新文本提取的事件首先进入pending_events
-- 每个事件包含: event(描述), arc_type(叙事弧类型), book_position_pct(**必须使用当前阅读进度%d%%**)
-- arc_type可选值: setup(铺垫), rising(发展), climax(高潮), falling(收尾), resolution(结局)
+        try:
+            user_input = input("\n> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return None
 
-**timeline（正式时间线）**：
-- 当pending_events累积≥5条 或 遇到major事件时，执行"软提交"
-- 软提交规则：
-  1. 将pending_events中的major事件提交到timeline
-  2. 根据叙事弧槽位配额决定是否提交minor事件
-  3. 槽位配额: setup(3-4), rising(5-6), climax(2-3), falling(3-4), resolution(2-3)
-  4. 若某arc_type槽位已满，新事件应替换该类型中importance较低的事件
-  5. 提交后清空pending_events中已提交的事件
+        if user_input == "q":
+            print("Cancelled.")
+            return None
+        elif user_input == "n" and current_page < total_pages - 1:
+            current_page += 1
+        elif user_input == "p" and current_page > 0:
+            current_page -= 1
+        else:
+            # Try to parse as book number
+            try:
+                book_num = int(user_input)
+                if 1 <= book_num <= total:
+                    selected = books[book_num - 1]
+                    print(f"\nSelected: {selected['title']} by {selected['author']}")
+                    return selected["epub_path"]
+                else:
+                    print(f"Invalid book number. Enter 1-{total}.")
+            except ValueError:
+                print("Invalid input. Enter a book number, n, p, or q.")
 
-**当前进度：%d%%**
-- 若进度<30%%: 主要产生setup和rising事件，timeline保守提交
-- 若30%%≤进度<70%%: 可能出现climax事件，适度提交
-- 若进度≥70%%: 开始出现falling和resolution事件，积极提交
 
-【timeline事件格式】：
-{
-  "sequence": N,
-  "event": "事件描述",
-  "arc_type": "setup|rising|climax|falling|resolution"
+# Meta-themes to filter out (structural/narrative terms, not reader-relevant)
+META_THEMES = {
+    "文本过渡",
+    "多重视角",
+    "叙事结构",
+    "文本结构",
+    "视角转换",
+    "章节划分",
+    "结构特征",
+    "叙事视角",
+    "文本特点",
+    "行文风格",
+    "写作手法",
+    "叙述方式",
 }
 
-timeline必须按**故事内时间顺序**排列，sequence从1连续编号，最多20条。
 
-【关键合并规则】：
-- 名字字段禁止包含括号或后缀，使用最纯粹的姓名
-- 同名人物/地点必须合并，不能创建重复条目
-- 【人物描述 - 必须严格遵守】每个人物描述**绝对不能超过**200字，超出时必须精简
+# === Load Prompts from Shared JSON ===
+def load_prompts():
+    """Load prompts from shared JSON file."""
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    prompts_path = os.path.join(script_dir, "prompts", "zh.json")
 
-【主题压缩】：
-- 【主题限制 - 必须严格遵守】themes严格限制为5-8个，**不得超过**
-- 若themes超过8个，必须合并最相似的主题直到≤8个
+    with open(prompts_path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-【去重与无痕合并】：
-- 禁用词汇："新文本"、"新片段"、"新增"、"新情节中"等
-- 合并后内容必须读起来像从头撰写，无拼接痕迹
-- 删除所有重复句子，只保留最完整版本
 
-【概要限制】summary不超过500字，简明扼要。
-
-【禁止添加未要求的字段】不要添加gender、type、importance等未在JSON格式中列出的字段。
-
-返回合并后的完整JSON：
-{
-  "book_title": "书名",
-  "author": "作者",
-  "author_bio": "...",
-  "summary": "更新后的概要（无分块痕迹）",
-  "characters": [...],
-  "locations": [...],
-  "themes": [...],
-  "pending_events": [
-    {
-      "event": "待提交事件",
-      "arc_type": "rising",
-      "book_position_pct": 45
+# === SDR Folder Name Generation ===
+def get_sdr_name(epub_path):
+    """Extract author/title from EPUB metadata and generate KOReader .sdr folder name."""
+    ns = {
+        "n": "urn:oasis:names:tc:opendocument:xmlns:container",
     }
-  ],
-  "timeline": [
-    {
-      "sequence": 1,
-      "event": "已提交事件（按故事时序）",
-      "arc_type": "setup"
-    }
-  ]
-}"""
+
+    with zipfile.ZipFile(epub_path) as z:
+        # Find OPF file
+        container = z.read("META-INF/container.xml")
+        root = ET.fromstring(container)
+        opf_path = root.find(".//n:rootfile", ns).attrib["full-path"]
+
+        # Read OPF metadata
+        opf_data = z.read(opf_path)
+        opf_root = ET.fromstring(opf_data)
+
+        metadata = opf_root.find(".//{http://www.idpf.org/2007/opf}metadata")
+
+        title = "Unknown"
+        author = "Unknown"
+
+        if metadata is not None:
+            t = metadata.find(".//{http://purl.org/dc/elements/1.1/}title")
+            c = metadata.find(".//{http://purl.org/dc/elements/1.1/}creator")
+            if t is not None and t.text:
+                title = t.text
+            if c is not None and c.text:
+                author = c.text
+
+    # Sanitize for filesystem
+    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title)
+    safe_author = re.sub(r'[<>:"/\\|?*]', "_", author)
+
+    return f"{safe_author} - {safe_title}.epub.sdr"
 
 
-# Prompt for final timeline curation at 100%
-# Parameters: title, pending_events_json, timeline_json
-TIMELINE_CURATION_PROMPT = """你是一位专业的文学编辑，正在为《%s》整理最终的时间线。
+PROMPTS = load_prompts()
 
-<待定事件>
-%s
-</待定事件>
+SYSTEM_PROMPT = PROMPTS["system_instruction"]
+CHUNK_SUMMARY_PROMPT = PROMPTS["chunk_summary"]
+CONSOLIDATE_DESC_PROMPT = PROMPTS["consolidate_description"]
+CONSOLIDATE_SUMMARY_PROMPT = PROMPTS["consolidate_summary"]
+EVENT_CONSOLIDATION_PROMPT = PROMPTS["event_consolidation"]
 
-<当前时间线>
-%s
-</当前时间线>
+# Global client reference for curation (set in main)
+_ai_client = None
+_book_title = None
+_current_pct = 0
 
-任务：将所有待定事件整合到时间线中，生成最终的20条精华时间线。
 
-【叙事弧槽位分配】（共20条）：
-- setup(铺垫): 3-4条 - 故事开端、人物登场、初始状态
-- rising(发展): 5-6条 - 冲突展开、复杂化、stakes升高
-- climax(高潮): 2-3条 - 最高张力、重大揭示、决战
-- falling(收尾): 3-4条 - 高潮后果、关系变化
-- resolution(结局): 2-3条 - 最终状态、人物命运
+# === Text Sanitization Patterns ===
+# Remove phrases that indicate incremental/chunk-based processing
+# Users should perceive the analysis as done in one pass
+INCREMENTAL_MARKERS = [
+    # Ordered by length (longest first) to prevent partial matches
+    # "本片段" variations (most common issue)
+    "本片段包含",
+    "本片段中",
+    "本片段",
+    "此片段包含",
+    "此片段中",
+    "此片段",
+    "该片段",
+    "当前片段",
+    # "新文本/片段" variations
+    "在新文本中，",
+    "在新文本中",
+    "新文本中，",
+    "新文本中",
+    "在新片段中",
+    "新片段中",
+    # "本段/此段" variations
+    "在本段中，",
+    "在本段中",
+    "在此段中",
+    "本段中",
+    "此段中",
+    # "章节" variations
+    "本章节中",
+    "此章节中",
+    "本节中",
+    # Generic indicators
+    "新情节中",
+    "新文本",
+    "新片段",
+    "片段中",
+]
 
-【整理规则】：
-1. 优先保留major事件，minor事件根据槽位余量决定
-2. 合并描述同一事件的重复条目
-3. 按故事内时间顺序排列（非阅读顺序）
-4. 确保叙事弧完整：从setup到resolution形成完整故事线
-5. 事件描述应简洁有力，每条不超过50字
 
-返回最终timeline的JSON数组：
-[
-  {
-    "sequence": 1,
-    "event": "精炼的事件描述",
-    "arc_type": "setup"
-  },
-  ...
-]"""
+def sanitize_text(text):
+    """Remove incremental processing markers from text."""
+    if not isinstance(text, str):
+        return text
+    for marker in INCREMENTAL_MARKERS:
+        text = text.replace(marker, "")
+    # Clean up any resulting double spaces or punctuation issues
+    text = re.sub(r"，，+", "，", text)
+    text = re.sub(r"。。+", "。", text)
+    text = re.sub(r"  +", " ", text)
+    return text.strip()
+
+
+class MasterData:
+    """
+    Python-maintained master data structure.
+    AI only summarizes chunks; Python handles all merging and consolidation.
+    """
+
+    DESC_LIMIT = 200
+    SUMMARY_LIMIT = 300
+
+    # Patterns to strip from character names
+    NAME_PREFIXES = [
+        "后妈",
+        "继母",
+        "生母",
+        "亲妈",
+        "外婆",
+        "奶奶",
+        "爷爷",
+        "外公",
+        "老",
+        "小",
+        "大",
+    ]
+    NAME_SUFFIXES = [
+        # Titles
+        "先生",
+        "太太",
+        "小姐",
+        "女士",
+        "夫人",
+        "阁下",
+        # Professions
+        "律师",
+        "医生",
+        "教授",
+        "老师",
+        "博士",
+        "神父",
+        "牧师",
+        # Family relations
+        "爸爸",
+        "妈妈",
+        "父亲",
+        "母亲",
+        "舅舅",
+        "姨父",
+        "姨妈",
+        "叔叔",
+        "阿姨",
+        "姑姑",
+        "姑父",
+        "伯父",
+        "伯母",
+        "哥哥",
+        "弟弟",
+        "姐姐",
+        "妹妹",
+        "表哥",
+        "表弟",
+        "表姐",
+        "表妹",
+        "堂哥",
+        "堂弟",
+        "堂姐",
+        "堂妹",
+    ]
+
+    @staticmethod
+    def normalize_name(name):
+        """Normalize character name by stripping titles, relations, parenthetical content."""
+        if not name:
+            return name
+
+        original = name
+
+        # Remove parenthetical content: "胡安娜（帕拉太太）" -> "胡安娜"
+        name = re.sub(r"[（(][^）)]*[）)]", "", name).strip()
+
+        # Skip generic references that can't be resolved
+        skip_patterns = [
+            "的父亲",
+            "的母亲",
+            "的朋友",
+            "的儿子",
+            "的女儿",
+            "的妻子",
+            "的丈夫",
+        ]
+        for pattern in skip_patterns:
+            if pattern in name:
+                return None
+
+        # Remove prefixes
+        for prefix in MasterData.NAME_PREFIXES:
+            if name.startswith(prefix) and len(name) > len(prefix):
+                name = name[len(prefix) :]
+                break
+
+        # Remove suffixes
+        for suffix in MasterData.NAME_SUFFIXES:
+            if name.endswith(suffix) and len(name) > len(suffix):
+                name = name[: -len(suffix)]
+                break
+
+        return name.strip() if name.strip() else original
+
+    @staticmethod
+    def normalize_for_dedup(name):
+        """Normalize name for deduplication (convert Traditional to Simplified Chinese)."""
+        if not name:
+            return name
+        # Convert Traditional to Simplified if opencc available
+        if _t2s_converter:
+            name = _t2s_converter.convert(name)
+        return name.strip()
+
+    @staticmethod
+    def normalize_location_name(name):
+        """Normalize location name for deduplication (hyphens + T2S)."""
+        if not name:
+            return name
+        # Normalize various dash characters to standard hyphen
+        name = name.replace("－", "-").replace("—", "-").replace("–", "-")
+        # Convert Traditional to Simplified if opencc available
+        if _t2s_converter:
+            name = _t2s_converter.convert(name)
+        return name.strip()
+
+    def __init__(self, book_title="", author="", author_bio=""):
+        self.book_title = book_title
+        self.author = author
+        self.author_bio = author_bio
+
+        # Characters/locations: normalized_key -> {"display_name": str, "descriptions": [...], "consolidated": None}
+        # We use normalized keys for deduplication but preserve first-seen display name
+        self.characters = {}
+        self.locations = {}
+
+        self.themes = set()
+        self.events = []  # All events collected, will be curated at end
+        self.summary_parts = []  # Chunk summaries to be merged
+
+    def merge_chunk(self, chunk_data):
+        """Merge a chunk summary into master data (blind append)."""
+
+        # === CHARACTERS ===
+        for char in chunk_data.get("characters", []):
+            raw_name = char.get("name", "").strip()
+            if not raw_name:
+                continue
+
+            # Normalize the name (strip titles, relations, etc.)
+            name = self.normalize_name(raw_name)
+            if not name:
+                # Skip generic references like "XX的父亲"
+                continue
+
+            desc = char.get("description", "").strip()
+
+            # Use normalized key for deduplication
+            dedup_key = self.normalize_for_dedup(name)
+
+            if dedup_key not in self.characters:
+                self.characters[dedup_key] = {
+                    "display_name": name,  # Preserve first-seen display name
+                    "descriptions": [],
+                    "consolidated": None,
+                }
+            if desc:
+                self.characters[dedup_key]["descriptions"].append(desc)
+                self.characters[dedup_key]["consolidated"] = None  # Invalidate
+
+        # === LOCATIONS ===
+        for loc in chunk_data.get("locations", []):
+            name = loc.get("name", "").strip()
+            if not name:
+                continue
+            desc = loc.get("description", "").strip()
+
+            # Use normalized key for deduplication
+            dedup_key = self.normalize_location_name(name)
+
+            if dedup_key not in self.locations:
+                self.locations[dedup_key] = {
+                    "display_name": name,  # Preserve first-seen display name
+                    "descriptions": [],
+                    "consolidated": None,
+                }
+            if desc:
+                self.locations[dedup_key]["descriptions"].append(desc)
+                self.locations[dedup_key]["consolidated"] = None  # Invalidate
+
+        # === THEMES ===
+        for theme in chunk_data.get("themes", []):
+            if theme and theme not in META_THEMES:  # Filter meta-themes
+                self.themes.add(theme)
+
+        # === EVENTS (now simple strings) ===
+        new_events = []
+        for e in chunk_data.get("events", []):
+            if isinstance(e, str) and e.strip():
+                new_events.append(e.strip())
+            elif isinstance(e, dict) and e.get("event"):
+                new_events.append(e.get("event"))
+
+        if new_events:
+            # Call AI to consolidate new events with existing events
+            consolidated = self.consolidate_events(new_events)
+            if consolidated is not None:
+                self.events = consolidated
+            else:
+                # Fallback: just append
+                self.events.extend(new_events)
+
+        # === SUMMARY ===
+        summary = chunk_data.get("summary", "").strip()
+        if summary:
+            self.summary_parts.append(summary)
+
+        # Update metadata if provided
+        if chunk_data.get("book_title"):
+            self.book_title = chunk_data["book_title"]
+        if chunk_data.get("author"):
+            self.author = chunk_data["author"]
+        if chunk_data.get("author_bio"):
+            self.author_bio = chunk_data["author_bio"]
+
+    def get_items_needing_consolidation(self):
+        """Return lists of items with multiple descriptions that need AI consolidation."""
+        chars_to_consolidate = []
+        locs_to_consolidate = []
+
+        for name, data in self.characters.items():
+            # Consolidate whenever we have 2+ description fragments
+            if data["consolidated"] is None and len(data["descriptions"]) > 1:
+                combined = " ".join(data["descriptions"])
+                chars_to_consolidate.append((name, combined))
+
+        for name, data in self.locations.items():
+            if data["consolidated"] is None and len(data["descriptions"]) > 1:
+                combined = " ".join(data["descriptions"])
+                locs_to_consolidate.append((name, combined))
+
+        return chars_to_consolidate, locs_to_consolidate
+
+    def apply_consolidation(self, entity_type, name, consolidated_desc):
+        """Apply AI-consolidated description."""
+        if entity_type == "character":
+            if name in self.characters:
+                self.characters[name]["consolidated"] = consolidated_desc
+                self.characters[name]["descriptions"] = []  # Clear raw fragments
+        elif entity_type == "location":
+            if name in self.locations:
+                self.locations[name]["consolidated"] = consolidated_desc
+                self.locations[name]["descriptions"] = []
+
+    def to_output_json(self, progress_pct):
+        """Convert to final output JSON format with importance-based limiting."""
+
+        def _score_importance(data):
+            """Score entity importance: description length + fragment count weight."""
+            desc = data.get("consolidated") or " ".join(data.get("descriptions", []))
+            fragment_count = len(data.get("descriptions", []))
+            return len(desc) + (fragment_count * 50)  # Weight multiple mentions
+
+        # Build character list with importance scoring
+        char_items = []
+        for key, data in self.characters.items():
+            if data["consolidated"]:
+                desc = data["consolidated"]
+            elif data["descriptions"]:
+                desc = " ".join(data["descriptions"])
+                if len(desc) > self.DESC_LIMIT:
+                    desc = desc[: self.DESC_LIMIT - 3] + "..."
+            else:
+                desc = ""
+
+            # Use display_name if available, fallback to key
+            display_name = data.get("display_name", key)
+            score = _score_importance(data)
+            char_items.append(
+                {"name": display_name, "description": desc, "_score": score}
+            )
+
+        # Sort by importance (most-mentioned first)
+        char_items.sort(key=lambda x: x["_score"], reverse=True)
+        characters = [
+            {"name": c["name"], "description": c["description"]} for c in char_items
+        ]
+
+        # Build location list with importance scoring
+        loc_items = []
+        for key, data in self.locations.items():
+            if data["consolidated"]:
+                desc = data["consolidated"]
+            elif data["descriptions"]:
+                desc = " ".join(data["descriptions"])
+                if len(desc) > self.DESC_LIMIT:
+                    desc = desc[: self.DESC_LIMIT - 3] + "..."
+            else:
+                desc = ""
+
+            # Use display_name if available, fallback to key
+            display_name = data.get("display_name", key)
+            score = _score_importance(data)
+            loc_items.append(
+                {"name": display_name, "description": desc, "_score": score}
+            )
+
+        # Sort by importance (most-mentioned first)
+        loc_items.sort(key=lambda x: x["_score"], reverse=True)
+        locations = [
+            {"name": l["name"], "description": l["description"]} for l in loc_items
+        ]
+
+        # Build summary (join parts, truncate if needed)
+        summary = " ".join(self.summary_parts)
+        if len(summary) > self.SUMMARY_LIMIT:
+            summary = summary[: self.SUMMARY_LIMIT - 3] + "..."
+
+        # Build timeline from all events (simple strings now)
+        timeline = []
+        for i, event in enumerate(self.events):
+            event_text = event if isinstance(event, str) else event.get("event", "")
+            timeline.append(
+                {
+                    "sequence": i + 1,
+                    "event": event_text,
+                }
+            )
+
+        # Filter themes (already filtered during merge, but ensure limit)
+        filtered_themes = [t for t in self.themes if t not in META_THEMES]
+
+        return {
+            "book_title": self.book_title,
+            "author": self.author,
+            "author_bio": self.author_bio,
+            "summary": summary,
+            "characters": characters,
+            "locations": locations,
+            "themes": filtered_themes[:8],
+            "timeline": timeline,
+            "analysis_progress": progress_pct,
+        }
+
+    def consolidate_events(self, new_events):
+        """Call AI to consolidate new events with existing events."""
+        global _ai_client, _current_pct
+
+        if _ai_client is None:
+            return None
+
+        if not self.events and not new_events:
+            return []
+
+        # If no existing events, just return new events
+        if not self.events:
+            return new_events
+
+        # If no new events, keep existing
+        if not new_events:
+            return self.events
+
+        existing_json = json.dumps(self.events, ensure_ascii=False)
+        new_json = json.dumps(new_events, ensure_ascii=False)
+
+        # Format: title, progress_pct, existing_events, new_events
+        prompt = EVENT_CONSOLIDATION_PROMPT % (
+            self.book_title,
+            _current_pct,
+            existing_json,
+            new_json,
+        )
+
+        try:
+            response = _ai_client.chat.completions.create(
+                model=MODEL_NAME,
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=16000,
+                response_format={"type": "json_object"},
+            )
+
+            content = response.choices[0].message.content
+            if content:
+                content = content.replace("```json", "").replace("```", "").strip()
+                result = json.loads(content)
+                consolidated = result.get("events", [])
+                if consolidated:
+                    print(
+                        f"  [Events] Consolidated: {len(self.events)} + {len(new_events)} -> {len(consolidated)}"
+                    )
+                    return consolidated
+        except Exception as e:
+            print(f"  [Events] Consolidation error: {e}")
+
+        # Fallback: just append
+        return None
+
+    def get_stats(self):
+        """Return current stats for logging."""
+        return {
+            "characters": len(self.characters),
+            "locations": len(self.locations),
+            "themes": len(self.themes),
+            "events": len(self.events),
+            "summary_parts": len(self.summary_parts),
+        }
+
+
+def consolidate_description_with_ai(client, entity_type, name, combined_desc):
+    """Call AI to consolidate a long description."""
+    # entity_type: "人物" or "地点"
+    type_cn = "人物" if entity_type == "character" else "地点"
+
+    prompt = CONSOLIDATE_DESC_PROMPT % (type_cn, name, combined_desc)
+
+    try:
+        response = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            max_tokens=6400,
+            response_format={"type": "json_object"},
+        )
+
+        content = response.choices[0].message.content
+        if content:
+            content = content.replace("```json", "").replace("```", "").strip()
+            result = json.loads(content)
+            return result.get("description", combined_desc[:200])
+    except Exception as e:
+        print(f"    [Consolidation Error] {name}: {e}")
+
+    # Fallback: truncate
+    return combined_desc[:197] + "..." if len(combined_desc) > 200 else combined_desc
 
 
 # === Data Cleanup Function ===
 def cleanup_data(data, current_pct):
     """Remove unrequested fields and enforce limits after AI response"""
-    # Remove gender from characters
+
+    # Sanitize summary
+    if "summary" in data:
+        data["summary"] = sanitize_text(data["summary"])
+
+    # Remove gender from characters and sanitize descriptions
     for char in data.get("characters", []):
         char.pop("gender", None)
-        # Truncate description to 200 chars if needed
-        if "description" in char and len(char["description"]) > 200:
-            char["description"] = char["description"][:197] + "..."
+        if "description" in char:
+            char["description"] = sanitize_text(char["description"])
 
-    # Remove type from locations
+    # === DEDUPLICATE CHARACTERS ===
+    # Merge duplicates by name, keeping the longer description
+    chars = data.get("characters", [])
+    if chars:
+        char_map = {}  # name -> character dict
+        for char in chars:
+            name = char.get("name", "").strip()
+            if not name:
+                continue
+            if name in char_map:
+                # Keep the longer description
+                existing_desc = char_map[name].get("description", "")
+                new_desc = char.get("description", "")
+                if len(new_desc) > len(existing_desc):
+                    char_map[name]["description"] = new_desc
+            else:
+                char_map[name] = char
+        data["characters"] = list(char_map.values())
+
+    # Remove type from locations and sanitize descriptions
     for loc in data.get("locations", []):
         loc.pop("type", None)
+        if "description" in loc:
+            loc["description"] = sanitize_text(loc["description"])
+
+    # === DEDUPLICATE LOCATIONS ===
+    # Merge duplicates by name, keeping the longer description
+    locs = data.get("locations", [])
+    if locs:
+        loc_map = {}  # name -> location dict
+        for loc in locs:
+            name = loc.get("name", "").strip()
+            if not name:
+                continue
+            if name in loc_map:
+                # Keep the longer description
+                existing_desc = loc_map[name].get("description", "")
+                new_desc = loc.get("description", "")
+                if len(new_desc) > len(existing_desc):
+                    loc_map[name]["description"] = new_desc
+            else:
+                loc_map[name] = loc
+        data["locations"] = list(loc_map.values())
+
+    # === DEDUPLICATE THEMES ===
+    themes = data.get("themes", [])
+    if themes:
+        seen = set()
+        unique_themes = []
+        for theme in themes:
+            if theme and theme not in seen:
+                seen.add(theme)
+                unique_themes.append(theme)
+        data["themes"] = unique_themes
 
     # Remove unrequested fields from timeline
     for event in data.get("timeline", []):
@@ -287,9 +891,7 @@ def cleanup_data(data, current_pct):
     if len(data.get("themes", [])) > 8:
         data["themes"] = data["themes"][:8]
 
-    # Truncate summary to 500 chars if needed
-    if "summary" in data and len(data["summary"]) > 500:
-        data["summary"] = data["summary"][:497] + "..."
+    # Timeline: no hard limit - per-chunk AI consolidation handles deduplication
 
     return data
 
@@ -304,8 +906,8 @@ class EpubReader:
             "dc": "http://purl.org/dc/elements/1.1/",
         }
 
-    def get_text(self):
-        """Extracts text from all spine items in reading order."""
+    def get_chapters(self):
+        """Extract chapters as list of (title, text) tuples in reading order."""
         try:
             with zipfile.ZipFile(self.epub_path) as z:
                 # 1. Find OPF file path
@@ -316,21 +918,22 @@ class EpubReader:
                 # 2. Read OPF
                 opf_data = z.read(opf_path)
                 opf_root = ET.fromstring(opf_data)
+                opf_dir = os.path.dirname(opf_path)
 
                 # Extract Metadata (Title/Author)
-                title = "Unknown Title"
+                book_title = "Unknown Title"
                 author = "Unknown Author"
 
                 metadata = opf_root.find(".//{http://www.idpf.org/2007/opf}metadata")
                 if metadata is not None:
                     t = metadata.find(".//{http://purl.org/dc/elements/1.1/}title")
                     c = metadata.find(".//{http://purl.org/dc/elements/1.1/}creator")
-                    if t is not None:
-                        title = t.text
-                    if c is not None:
+                    if t is not None and t.text:
+                        book_title = t.text
+                    if c is not None and c.text:
                         author = c.text
 
-                print(f"Book: {title} by {author}")
+                print(f"Book: {book_title} by {author}")
 
                 # 3. Parse Manifest and Spine
                 manifest = {}
@@ -345,9 +948,49 @@ class EpubReader:
                 ):
                     spine.append(itemref.attrib["idref"])
 
-                # 4. Extract Text
-                full_text = []
-                opf_dir = os.path.dirname(opf_path)
+                # 4. Extract TOC from NCX or NAV for chapter titles
+                toc_map = {}  # Map from file path -> chapter title
+
+                # Try NCX first
+                ncx_id = None
+                for item_id, href in manifest.items():
+                    if href.endswith(".ncx"):
+                        ncx_id = item_id
+                        break
+
+                if ncx_id:
+                    ncx_path = os.path.join(opf_dir, manifest[ncx_id]).replace(
+                        "\\", "/"
+                    )
+                    try:
+                        ncx_data = z.read(ncx_path)
+                        ncx_root = ET.fromstring(ncx_data)
+                        ncx_ns = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
+
+                        for nav_point in ncx_root.findall(".//ncx:navPoint", ncx_ns):
+                            text_elem = nav_point.find("ncx:navLabel/ncx:text", ncx_ns)
+                            content_elem = nav_point.find("ncx:content", ncx_ns)
+                            if text_elem is not None and content_elem is not None:
+                                nav_title = (
+                                    text_elem.text.strip() if text_elem.text else None
+                                )
+                                nav_src = content_elem.attrib.get("src", "")
+                                # Remove fragment identifier (e.g., #chapter1)
+                                nav_file = nav_src.split("#")[0]
+                                if nav_title and nav_file:
+                                    # Normalize path
+                                    full_path = os.path.join(opf_dir, nav_file).replace(
+                                        "\\", "/"
+                                    )
+                                    toc_map[full_path] = nav_title
+                    except Exception as e:
+                        print(f"Warning: Could not parse NCX: {e}")
+
+                print(f"Found {len(toc_map)} TOC entries")
+
+                # 5. Extract Chapters with Titles
+                chapters = []
+                chapter_index = 0
 
                 for item_id in spine:
                     if item_id in manifest:
@@ -356,18 +999,83 @@ class EpubReader:
                         )
                         try:
                             content = z.read(file_path).decode("utf-8")
-                            text = self.html_to_text(content)
+
+                            # Try to get title from TOC first
+                            toc_title = toc_map.get(file_path)
+
+                            # Extract chapter with TOC title hint
+                            chapter_title, text = self.extract_chapter(
+                                content, chapter_index, book_title, toc_title
+                            )
                             if text.strip():
-                                full_text.append(text)
+                                chapters.append((chapter_title, text))
+                                chapter_index += 1
                         except KeyError:
                             print(f"Warning: File {file_path} not found in archive.")
                         except Exception as e:
                             print(f"Error extracting {file_path}: {e}")
 
-                return "\n".join(full_text), title, author
+                return chapters, book_title, author
         except Exception as e:
             print(f"Fatal error reading EPUB: {e}")
             return None, None, None
+
+    def extract_chapter(self, html, fallback_index, book_title=None, toc_title=None):
+        """Extract chapter title and text from HTML content."""
+
+        # Priority 1: Use TOC title if provided and it's not the book title
+        if toc_title and toc_title != book_title:
+            text = self.html_to_text(html)
+            return toc_title, text
+
+        chapter_title = None
+
+        # Priority 2: Try first <h1>, <h2>, or <h3> (more likely to be chapter title)
+        for h_level in ["h1", "h2", "h3"]:
+            h_match = re.search(
+                rf"<{h_level}[^>]*>(.*?)</{h_level}>", html, re.DOTALL | re.IGNORECASE
+            )
+            if h_match:
+                raw_title = h_match.group(1).strip()
+                raw_title = re.sub(r"<[^>]+>", "", raw_title)
+                raw_title = (
+                    raw_title.replace("&nbsp;", " ").replace("&amp;", "&").strip()
+                )
+                # Skip if it's the book title or too long
+                if raw_title and len(raw_title) < 100 and raw_title != book_title:
+                    chapter_title = raw_title
+                    break
+
+        # Priority 3: Try <title> tag only if it's different from book title
+        if not chapter_title:
+            title_match = re.search(
+                r"<title[^>]*>(.*?)</title>", html, re.DOTALL | re.IGNORECASE
+            )
+            if title_match:
+                raw_title = title_match.group(1).strip()
+                raw_title = re.sub(r"<[^>]+>", "", raw_title)
+                raw_title = (
+                    raw_title.replace("&nbsp;", " ").replace("&amp;", "&").strip()
+                )
+                if raw_title and len(raw_title) < 100 and raw_title != book_title:
+                    chapter_title = raw_title
+
+        # Fallback to generic chapter name
+        if not chapter_title:
+            chapter_title = f"第{fallback_index + 1}节"
+
+        # Extract text content
+        text = self.html_to_text(html)
+
+        return chapter_title, text
+
+    def get_text(self):
+        """Legacy method: Extracts all text as a single string (for backward compatibility)."""
+        chapters, book_title, author = self.get_chapters()
+        if chapters:
+            full_text = "\n".join([text for _, text in chapters])
+            return full_text, book_title, author
+        return None, None, None
 
     def html_to_text(self, html):
         """Rudimentary HTML to text converter."""
@@ -391,41 +1099,69 @@ class EpubReader:
 
 # === Main Logic ===
 def main():
-    if len(sys.argv) < 2:
-        print("Usage: python xray_generator.py <epub_file_path>")
-        print("\nConfiguration via environment variables:")
-        print("  XRAY_API_BASE  - API endpoint (default: http://localhost:8080/v1)")
-        print("  XRAY_API_KEY   - Your API key")
-        print("  XRAY_MODEL     - Model name (default: gemini-2.5-flash-lite)")
-        return
+    # Check for --browse flag or no arguments
+    if len(sys.argv) < 2 or sys.argv[1] in ("--browse", "-b", "--list", "-l"):
+        print("X-Ray Generator - Calibre Library Browser")
+        print(f"Scanning library: {CALIBRE_LIBRARY}")
+        print("Please wait...\n")
 
-    target_path = sys.argv[1]
+        books = scan_calibre_library(CALIBRE_LIBRARY)
+        if not books:
+            print("\nNo EPUB books found in Calibre library.")
+            print(f"Check that CALIBRE_LIBRARY path is correct: {CALIBRE_LIBRARY}")
+            print("\nAlternatively, specify an EPUB file directly:")
+            print("  python xray_generator.py <epub_file_path>")
+            return
 
-    if not os.path.exists(target_path):
-        print(f"File not found: {target_path}")
-        return
+        print(f"Found {len(books)} EPUB books.\n")
+
+        # Launch interactive browser
+        target_path = display_library_browser(books)
+        if target_path is None:
+            return  # User cancelled
+
+        print()  # Blank line before processing
+    else:
+        target_path = sys.argv[1]
+
+        if not os.path.exists(target_path):
+            print(f"File not found: {target_path}")
+            print("\nUsage:")
+            print("  python xray_generator.py <epub_file_path>")
+            print("  python xray_generator.py --browse  (browse Calibre library)")
+            print("\nConfiguration via environment variables:")
+            print(
+                "  XRAY_API_BASE    - API endpoint (default: http://localhost:8080/v1)"
+            )
+            print("  XRAY_API_KEY     - Your API key")
+            print("  XRAY_MODEL       - Model name (default: gemini-2.5-flash-lite)")
+            print("  CALIBRE_LIBRARY  - Path to Calibre library")
+            return
 
     print(f"Using API: {API_BASE_URL}")
     print(f"Using Model: {MODEL_NAME}")
     print(f"\nReading {target_path}...")
 
     reader = EpubReader(target_path)
-    full_text, title, author = reader.get_text()
+    chapters, title, author = reader.get_chapters()
 
-    if not full_text:
-        print("Failed to extract text.")
+    if not chapters:
+        print("Failed to extract chapters.")
         return
 
-    print(f"Total text length: {len(full_text)} characters")
+    # Calculate total text length for percentage calculations
+    total_len = sum(len(text) for _, text in chapters)
+    print(f"Total text length: {total_len} characters")
     print(f"Book Title: {title}")
+    print(f"Found {len(chapters)} chapters")
 
-    # Create Output Directory
-    # Sanitize title for filesystem
-    safe_title = re.sub(r'[<>:"/\\|?*]', "_", title).strip()
-    if not safe_title:
-        safe_title = "output"
+    # Create Output Directory inside xray.koplugin/xray/
+    # Use SDR naming convention: "Author - Title.epub.sdr"
+    sdr_name = get_sdr_name(target_path)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    xray_base_dir = os.path.join(script_dir, "xray")
+    output_dir = os.path.join(xray_base_dir, sdr_name, "xray_analysis")
 
-    output_dir = os.path.join(os.getcwd(), safe_title)
     if not os.path.exists(output_dir):
         try:
             os.makedirs(output_dir)
@@ -436,91 +1172,224 @@ def main():
     else:
         print(f"Using output directory: {output_dir}")
 
-    # Initialize OpenAI Client
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    # === Resume Logic: Detect existing checkpoint ===
+    resume_pct = 0
+    resume_data = None
 
-    # Chunking Logic (fixed 10k character chunks, but minimum 10 chunks for small books)
-    MIN_CHUNKS = 10
-    DEFAULT_CHUNK_SIZE = 10000
-    total_len = len(full_text)
-
-    if total_len < DEFAULT_CHUNK_SIZE * MIN_CHUNKS:
-        # Small book: force 10 chunks
-        total_chunks = MIN_CHUNKS
-        chunk_size = math.ceil(total_len / MIN_CHUNKS)
-        print(
-            f"Small book detected. Will process in {total_chunks} chunks ({chunk_size} chars each)"
-        )
-    else:
-        # Normal: use 10k chunks
-        chunk_size = DEFAULT_CHUNK_SIZE
-        total_chunks = math.ceil(total_len / chunk_size)
-        print(f"Will process in {total_chunks} chunks ({chunk_size} chars each)")
-
-    current_data = None
-
-    # Resume Logic (check for existing N%.json in output_dir)
-    start_step = 1
-    for i in range(total_chunks, 0, -1):
-        # Calculate percentage for this chunk
-        end_idx = min(i * chunk_size, total_len)
-        pct = math.ceil(end_idx * 100 / total_len)
-        filename = os.path.join(output_dir, f"{pct}%.json")
-        if os.path.exists(filename):
-            print(f"Found existing progress at {pct}%. Resuming from chunk {i + 1}...")
+    for filename in os.listdir(output_dir):
+        if filename.endswith(".json") and "%" in filename:
             try:
-                with open(filename, "r", encoding="utf-8") as f:
-                    current_data = json.load(f)
-                start_step = i + 1
-                break
-            except json.JSONDecodeError:
-                print(f"Warning: Corrupt JSON at {filename}, ignoring...")
+                pct = int(filename.replace("%.json", ""))
+                if pct > resume_pct:
+                    resume_pct = pct
+            except ValueError:
                 continue
 
+    if resume_pct > 0:
+        checkpoint_file = os.path.join(output_dir, f"{resume_pct}%.json")
+        try:
+            with open(checkpoint_file, "r", encoding="utf-8") as f:
+                resume_data = json.load(f)
+            print(f"Found checkpoint at {resume_pct}%. Resuming from there...")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"Warning: Could not load checkpoint {checkpoint_file}: {e}")
+            print("Starting fresh...")
+            resume_pct = 0
+            resume_data = None
+
+    # Initialize OpenAI Client with 60s timeout
+    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=60.0)
+
+    # Set global references for AI curation during cleanup
+    global _ai_client, _book_title, _current_pct
+    _ai_client = client
+    _book_title = title
+
+    # === Chapter-based Chunking ===
+    # Respect 10k character limit, split large chapters into segments
+    # Each segment keeps chapter title context with (续) marker for continuations
+    MAX_CHUNK_SIZE = 15000
+
+    chunks = []  # List of (chapter_titles, combined_text, end_char_position)
+    current_chunk_titles = []
+    current_chunk_text = ""
+    chars_processed = 0
+
+    for chapter_title, chapter_text in chapters:
+        chapter_len = len(chapter_text)
+
+        # If chapter is larger than MAX_CHUNK_SIZE, split it
+        if chapter_len > MAX_CHUNK_SIZE:
+            # First, flush any pending content
+            if current_chunk_text.strip():
+                chunks.append(
+                    (current_chunk_titles, current_chunk_text.strip(), chars_processed)
+                )
+                current_chunk_titles = []
+                current_chunk_text = ""
+
+            # Split the large chapter into segments
+            segment_idx = 0
+            start = 0
+            while start < chapter_len:
+                end = min(start + MAX_CHUNK_SIZE, chapter_len)
+
+                # Try to split at a paragraph boundary (newline) if possible
+                if end < chapter_len:
+                    # Look for a newline in the last 500 chars of the segment
+                    search_start = max(end - 500, start)
+                    last_newline = chapter_text.rfind("\n", search_start, end)
+                    if last_newline > start:
+                        end = last_newline + 1
+
+                segment_text = chapter_text[start:end]
+
+                # Add chapter title header, with (续) marker for continuation segments
+                if segment_idx == 0:
+                    header = f"【{chapter_title}】"
+                else:
+                    header = f"【{chapter_title}（续{segment_idx}）】"
+
+                segment_with_header = f"{header}\n{segment_text}\n\n"
+
+                chunks.append(
+                    (
+                        [
+                            f"{chapter_title}"
+                            if segment_idx == 0
+                            else f"{chapter_title}（续{segment_idx}）"
+                        ],
+                        segment_with_header.strip(),
+                        chars_processed + end,
+                    )
+                )
+
+                segment_idx += 1
+                start = end
+
+            chars_processed += chapter_len
+        else:
+            # Normal chapter - use existing logic
+            chapter_with_header = f"【{chapter_title}】\n{chapter_text}\n\n"
+
+            # If adding this chapter would exceed limit, flush current chunk first
+            if (
+                current_chunk_text
+                and len(current_chunk_text) + len(chapter_with_header) > MAX_CHUNK_SIZE
+            ):
+                chunks.append(
+                    (current_chunk_titles, current_chunk_text.strip(), chars_processed)
+                )
+                current_chunk_titles = []
+                current_chunk_text = ""
+
+            # Add chapter to current chunk
+            current_chunk_titles.append(chapter_title)
+            current_chunk_text += chapter_with_header
+            chars_processed += chapter_len
+
+    # Don't forget the last chunk
+    if current_chunk_text.strip():
+        chunks.append(
+            (current_chunk_titles, current_chunk_text.strip(), chars_processed)
+        )
+
+    total_chunks = len(chunks)
+    print(
+        f"Will process in {total_chunks} chapter-based chunks (max {MAX_CHUNK_SIZE} chars each)"
+    )
+
+    # Initialize MasterData
+    master = MasterData(book_title=title, author=author)
+
+    # Calculate starting chunk based on resume percentage
+    start_step = 1
+    if resume_pct > 0 and resume_data:
+        # Find which chunk corresponds to this percentage
+        for idx, (_, _, end_pos) in enumerate(chunks):
+            chunk_pct = int((end_pos / total_len) * 100)
+            if chunk_pct >= resume_pct:
+                start_step = idx + 2  # Start from next chunk (1-indexed)
+                break
+        else:
+            start_step = total_chunks + 1  # Already complete
+
+        # Restore MasterData from checkpoint
+        for char in resume_data.get("characters", []):
+            name = char.get("name", "").strip()
+            if name:
+                dedup_key = master.normalize_for_dedup(name)
+                master.characters[dedup_key] = {
+                    "display_name": name,
+                    "descriptions": [char.get("description", "")],
+                    "consolidated": char.get("description", ""),
+                }
+
+        for loc in resume_data.get("locations", []):
+            name = loc.get("name", "").strip()
+            if name:
+                dedup_key = master.normalize_location_name(name)
+                master.locations[dedup_key] = {
+                    "display_name": name,
+                    "descriptions": [loc.get("description", "")],
+                    "consolidated": loc.get("description", ""),
+                }
+
+        for theme in resume_data.get("themes", []):
+            if theme and theme not in META_THEMES:
+                master.themes.add(theme)
+
+        for event in resume_data.get("timeline", []):
+            master.events.append(event)
+
+        if resume_data.get("summary"):
+            master.summary_parts.append(resume_data["summary"])
+
+        master.book_title = resume_data.get("book_title", title)
+        master.author = resume_data.get("author", author)
+        master.author_bio = resume_data.get("author_bio", "")
+
+        print(
+            f"Restored {len(master.characters)} characters, {len(master.locations)} locations from checkpoint"
+        )
+
+        if start_step > total_chunks:
+            print(f"Analysis already complete at {resume_pct}%!")
+            return
+
+        print(f"Resuming from chunk {start_step}/{total_chunks}")
+
+    print(f"\n=== Starting Analysis with Python-Maintained Data Architecture ===")
+
     for i in range(start_step, total_chunks + 1):
-        start_idx = (i - 1) * chunk_size
-        end_idx = min(i * chunk_size, total_len)
+        chapter_titles, chunk_text, end_pos = chunks[i - 1]
 
-        # If this is the second-to-last chunk combine them into one
-        if i == total_chunks - 1:
-            end_idx = total_len  # Extend to include the final chunk
-            print("Combining last 2 chunks")
-
-        chunk_text = full_text[start_idx:end_idx]
+        # Format chapter title(s) for display in console
+        if len(chapter_titles) == 1:
+            chapter_display = chapter_titles[0]
+        else:
+            chapter_display = " → ".join(chapter_titles)
 
         if not chunk_text.strip():
             print(f"Skipping empty chunk ({i}/{total_chunks})")
             continue
 
-        print(
-            f"\n=== Processing Chunk {i}/{total_chunks} ({start_idx}-{end_idx}/{total_len}) ==="
-        )
+        print(f"\n=== Chunk {i}/{total_chunks}: 《{chapter_display}》 ===")
 
-        # Prepare Prompt
         # Calculate reading progress percentage
-        pct = math.ceil(end_idx * 100 / total_len)
+        pct = math.ceil(end_pos * 100 / total_len)
 
-        if current_data is None:
-            # First Chunk - params: title, author, reading_progress, chunk_text
-            prompt = TEXT_BASED_PROMPT % (title, author, pct, chunk_text)
-        else:
-            # Incremental - params: title, author, reading_progress, existing_json, chunk_text, progress_again
-            existing_json = json.dumps(current_data, ensure_ascii=False)
-            prompt = INCREMENTAL_PROMPT % (
-                title,
-                author,
-                pct,
-                existing_json,
-                chunk_text,
-                pct,  # for the book_position_pct description
-                pct,  # for the "当前进度" section
-            )
+        # === STEP 1: AI summarizes just this chunk ===
+        # params: title, author, reading_progress, chunk_text
+        prompt = CHUNK_SUMMARY_PROMPT % (title, author, pct, chunk_text)
 
         # Retry Loop
         MAX_RETRIES = 2
+        chunk_data = None
+
         for attempt in range(MAX_RETRIES + 1):
             print(
-                f"Sending request (Attempt {attempt + 1})... (Prompt len: {len(prompt)})"
+                f"  AI Summary (Attempt {attempt + 1})... (Prompt len: {len(prompt)})"
             )
 
             try:
@@ -532,118 +1401,90 @@ def main():
                     ],
                     temperature=TEMPERATURE,
                     top_p=TOP_P,
-                    max_tokens=MAX_TOKENS,
                     response_format={"type": "json_object"},
                 )
 
                 content = response.choices[0].message.content
-                # Check for empty response (safety filter, etc.)
                 if content is None:
-                    print(
-                        f"\n⚠ Safety filter triggered at {pct}%. Skipping this chunk..."
-                    )
-                    break  # Skip to next chunk
-                # Clean markdown if present
+                    print(f"  ⚠ Safety filter triggered. Skipping chunk...")
+                    break
+
                 content = content.replace("```json", "").replace("```", "").strip()
 
                 try:
-                    new_data = json.loads(content)
-                    # Clean up unrequested fields and enforce limits
-                    new_data = cleanup_data(new_data, pct)
-                    current_data = new_data
-                    # Use percentage calculated earlier
-                    current_data["analysis_progress"] = pct
-
-                    # Save progress
-                    filename = os.path.join(output_dir, f"{pct}%.json")
-                    with open(filename, "w", encoding="utf-8") as f:
-                        json.dump(current_data, f, ensure_ascii=False, indent=2)
-                    print(f"Saved {filename}")
-                    break  # Success, exit retry loop
-
+                    chunk_data = json.loads(content)
+                    break  # Success
                 except json.JSONDecodeError as e:
-                    print(f"Error parsing JSON response: {e}")
-                    print(f"Raw response: {content[:200]}...")
+                    print(f"  JSON Error: {e}")
                     if attempt < MAX_RETRIES:
-                        print("Retrying...")
-                        continue
-                    else:
-                        print("Max retries reached. Aborting.")
-                        sys.exit(1)
+                        print("  Retrying...")
+                    continue
 
             except Exception as e:
-                print(f"API Request Failed: {e}")
+                print(f"  API Error: {e}")
                 if attempt < MAX_RETRIES:
-                    print("Retrying...")
-                    continue
-                else:
-                    sys.exit(1)
+                    print("  Retrying...")
+                continue
 
-    # === Final Timeline Curation at 100% ===
-    if current_data and current_data.get("analysis_progress") == 100:
-        pending_events = current_data.get("pending_events", [])
-        timeline = current_data.get("timeline", [])
+        if not chunk_data:
+            print(f"  Failed to get chunk summary. Skipping...")
+            continue
 
-        # Only run curation if there are pending events to process
-        if pending_events:
-            print("\n=== Running Final Timeline Curation ===")
+        # Update global progress for event consolidation
+        global _current_pct
+        _current_pct = pct
 
-            pending_json = json.dumps(pending_events, ensure_ascii=False)
-            timeline_json = json.dumps(timeline, ensure_ascii=False)
-            curation_prompt = TIMELINE_CURATION_PROMPT % (
-                title,
-                pending_json,
-                timeline_json,
+        # === STEP 2: Python merges chunk data into master ===
+        master.merge_chunk(chunk_data)
+        stats = master.get_stats()
+        print(
+            f"  [Merged] Chars: {stats['characters']}, Locs: {stats['locations']}, Events: {stats['events']}"
+        )
+
+        # === STEP 3: Check for items needing consolidation ===
+        chars_to_consolidate, locs_to_consolidate = (
+            master.get_items_needing_consolidation()
+        )
+
+        if chars_to_consolidate or locs_to_consolidate:
+            print(
+                f"  [Consolidation] {len(chars_to_consolidate)} chars, {len(locs_to_consolidate)} locs need merging"
             )
 
-            try:
-                response = client.chat.completions.create(
-                    model=MODEL_NAME,
-                    messages=[
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": curation_prompt},
-                    ],
-                    temperature=TEMPERATURE,
-                    top_p=TOP_P,
-                    max_tokens=MAX_TOKENS,
-                    response_format={"type": "json_object"},
+            for name, combined_desc in chars_to_consolidate:
+                consolidated = consolidate_description_with_ai(
+                    client, "character", name, combined_desc
+                )
+                master.apply_consolidation("character", name, consolidated)
+                print(
+                    f"    ✓ {name}: {len(combined_desc)} -> {len(consolidated)} chars"
                 )
 
-                content = response.choices[0].message.content
-                if content:
-                    content = content.replace("```json", "").replace("```", "").strip()
-                    try:
-                        # The curation prompt returns an array, but json_object mode wraps it
-                        curated_result = json.loads(content)
+            for name, combined_desc in locs_to_consolidate:
+                consolidated = consolidate_description_with_ai(
+                    client, "location", name, combined_desc
+                )
+                master.apply_consolidation("location", name, consolidated)
+                print(
+                    f"    ✓ {name}: {len(combined_desc)} -> {len(consolidated)} chars"
+                )
 
-                        # Handle both array and object responses
-                        if isinstance(curated_result, list):
-                            curated_timeline = curated_result
-                        elif (
-                            isinstance(curated_result, dict)
-                            and "timeline" in curated_result
-                        ):
-                            curated_timeline = curated_result["timeline"]
-                        else:
-                            curated_timeline = timeline  # Fallback
+        # === STEP 4: Save progress ===
+        output_data = master.to_output_json(pct)
+        filename = os.path.join(output_dir, f"{pct}%.json")
+        with open(filename, "w", encoding="utf-8") as f:
+            json.dump(output_data, f, ensure_ascii=False, indent=2)
+        print(f"  Saved {filename}")
 
-                        # Update the data
-                        current_data["timeline"] = curated_timeline
-                        current_data["pending_events"] = []  # Clear pending
+    # Generate final 100% output (no additional curation - per-chunk consolidation already handled)
+    final_data = master.to_output_json(100)
+    print(f"\n=== Final Analysis: {len(final_data['timeline'])} timeline events ===")
 
-                        # Save final curated version
-                        filename = os.path.join(output_dir, "100%.json")
-                        with open(filename, "w", encoding="utf-8") as f:
-                            json.dump(current_data, f, ensure_ascii=False, indent=2)
-                        print(f"Saved curated timeline to {filename}")
-
-                    except json.JSONDecodeError as e:
-                        print(f"Warning: Failed to parse curation response: {e}")
-
-            except Exception as e:
-                print(f"Warning: Timeline curation failed: {e}")
-        else:
-            print("\nNo pending events to curate. Timeline is complete.")
+    # Save final 100% file
+    filename = os.path.join(output_dir, "100%.json")
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(final_data, f, ensure_ascii=False, indent=2)
+    print(f"\nSaved final analysis to {filename}")
 
     # === Copy first chunk as 0%.json for users at book start ===
     import shutil
