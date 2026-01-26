@@ -18,6 +18,7 @@ Configuration:
 
 import sys
 import os
+import time
 import json
 import zipfile
 import re
@@ -39,7 +40,6 @@ except ImportError:
 API_BASE_URL = os.environ.get("XRAY_API_BASE", "http://127.0.0.1:8045/v1")
 API_KEY = os.environ.get("XRAY_API_KEY", "sk-e80a5d77e693448cadce981aa5b752de")
 MODEL_NAME = os.environ.get("XRAY_MODEL", "gemini-3-pro-high")
-MAX_TOKENS = 128000
 
 TEMPERATURE = 0.4
 TOP_P = 0.95
@@ -339,6 +339,39 @@ INCREMENTAL_MARKERS = [
     "新片段",
     "片段中",
 ]
+
+
+# === AI Helper with Retry ===
+def call_ai_with_retry(
+    client, model, messages, temperature=0.3, max_tokens=None, retries=3, delay=2
+):
+    """Call AI with retry logic for timeouts and API errors."""
+    for attempt in range(retries):
+        try:
+            kwargs = {
+                "model": model,
+                "messages": messages,
+                "temperature": temperature,
+                "response_format": {"type": "json_object"},
+            }
+            if max_tokens:
+                kwargs["max_tokens"] = max_tokens
+
+            response = client.chat.completions.create(**kwargs)
+            return response
+        except Exception as e:
+            if attempt == retries - 1:
+                # Last attempt failed, re-raise or return None depending on strategy
+                # Here we raise to let caller handle or just print
+                print(f"    [AI Error] Final attempt failed: {e}")
+                raise e
+
+            print(
+                f"    [AI Error] Attempt {attempt + 1}/{retries} failed: {e}. Retrying in {delay}s..."
+            )
+            time.sleep(delay)
+            delay *= 2  # Exponential backoff
+    return None
 
 
 def sanitize_text(text):
@@ -730,15 +763,15 @@ class MasterData:
         )
 
         try:
-            response = _ai_client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
+            response = call_ai_with_retry(
+                _ai_client,
+                MODEL_NAME,
+                [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
                 temperature=0.3,
-                max_tokens=16000,
-                response_format={"type": "json_object"},
+                retries=3,
             )
 
             content = response.choices[0].message.content
@@ -776,15 +809,15 @@ def consolidate_description_with_ai(client, entity_type, name, combined_desc):
     prompt = CONSOLIDATE_DESC_PROMPT % (type_cn, name, combined_desc)
 
     try:
-        response = client.chat.completions.create(
-            model=MODEL_NAME,
-            messages=[
+        response = call_ai_with_retry(
+            client,
+            MODEL_NAME,
+            [
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
-            max_tokens=6400,
-            response_format={"type": "json_object"},
+            retries=3,
         )
 
         content = response.choices[0].message.content
