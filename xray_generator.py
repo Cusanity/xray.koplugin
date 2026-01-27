@@ -196,6 +196,35 @@ XML_NS_OPF = {
 XML_NS_NCX = {"ncx": "http://www.daisy.org/z3986/2005/ncx/"}
 
 # =============================================================================
+# Preferences Persistence
+# =============================================================================
+
+_PREFS_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), ".xray_prefs.json"
+)
+
+
+def _load_preferences() -> dict[str, Any]:
+    """Load preferences from JSON file."""
+    if os.path.exists(_PREFS_FILE):
+        try:
+            with open(_PREFS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_preferences(prefs: dict[str, Any]) -> None:
+    """Save preferences to JSON file."""
+    try:
+        with open(_PREFS_FILE, "w", encoding="utf-8") as f:
+            json.dump(prefs, f, ensure_ascii=False, indent=2)
+    except OSError:
+        pass  # Silent fail - preferences are not critical
+
+
+# =============================================================================
 # Global State
 # =============================================================================
 
@@ -824,8 +853,21 @@ def display_library_browser(
         return None
 
     total = len(books)
-    current_page = 0
     total_pages = (total + page_size - 1) // page_size
+
+    # Load last selection preferences
+    prefs = _load_preferences()
+    last_book_path = prefs.get("last_book_path", "")
+    last_book_num = prefs.get("last_book_num", 0)
+
+    # Find the page containing the last selected book
+    current_page = 0
+    if last_book_path:
+        for i, book in enumerate(books):
+            if book["epub_path"] == last_book_path:
+                current_page = i // page_size
+                last_book_num = i + 1
+                break
 
     while True:
         start_idx = current_page * page_size
@@ -842,11 +884,16 @@ def display_library_browser(
             display_title = (
                 book["title"][:42] + "..." if len(book["title"]) > 45 else book["title"]
             )
-            print(f"  [{i + 1:3d}] {display_title}")
+            # Mark last selected book
+            marker = " *" if i + 1 == last_book_num else ""
+            print(f"  [{i + 1:3d}] {display_title}{marker}")
             print(f"        by {book['author']}")
 
         print(f"\n{'─' * 60}")
-        print("Commands: [n]ext page, [p]rev page, [q]uit, or enter book number")
+        hint = ""
+        if last_book_num > 0:
+            hint = f" [Enter={last_book_num}]"
+        print(f"Commands: [n]ext page, [p]rev page, [q]uit, or enter book number{hint}")
 
         try:
             user_input = input("\n> ").strip().lower()
@@ -861,12 +908,21 @@ def display_library_browser(
             current_page += 1
         elif user_input == "p" and current_page > 0:
             current_page -= 1
+        elif not user_input and last_book_num > 0:
+            # Press Enter to select last book
+            selected = books[last_book_num - 1]
+            print(f"\nSelected: {selected['title']} by {selected['author']}")
+            return selected["epub_path"]
         else:
             try:
                 book_num = int(user_input)
                 if 1 <= book_num <= total:
                     selected = books[book_num - 1]
                     print(f"\nSelected: {selected['title']} by {selected['author']}")
+                    # Save preference
+                    prefs["last_book_path"] = selected["epub_path"]
+                    prefs["last_book_num"] = book_num
+                    _save_preferences(prefs)
                     return selected["epub_path"]
                 else:
                     print(f"Invalid book number. Enter 1-{total}.")
@@ -1330,16 +1386,29 @@ def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
 
 def display_model_selector() -> str | None:
     """Display model selection menu and return selected model name."""
+    # Load last selected model preference
+    prefs = _load_preferences()
+    last_model = prefs.get("last_model", "")
+
+    # Determine which model to show as default (prefer last used over env default)
+    effective_default = last_model if last_model in AVAILABLE_MODELS else MODEL_NAME
+
     print(f"\n{'=' * 60}")
     print("Select AI Model")
     print(f"{'=' * 60}\n")
 
+    default_idx = -1
     for i, model in enumerate(AVAILABLE_MODELS, 1):
-        default_marker = " (default)" if model == MODEL_NAME else ""
-        print(f"  [{i}] {model}{default_marker}")
+        markers = []
+        if model == effective_default:
+            markers.append("last used" if model == last_model else "default")
+            default_idx = i
+        marker_str = f" ({', '.join(markers)})" if markers else ""
+        print(f"  [{i}] {model}{marker_str}")
 
     print(f"\n{'─' * 60}")
-    print("Enter model number, or press Enter for default")
+    hint = f" [Enter={default_idx}]" if default_idx > 0 else ""
+    print(f"Enter model number, or press Enter for last used{hint}")
 
     try:
         user_input = input("\n> ").strip()
@@ -1347,21 +1416,28 @@ def display_model_selector() -> str | None:
         print("\nCancelled.")
         return None
 
+    # Default to last used/effective default on Enter
     if not user_input:
-        return MODEL_NAME
+        prefs["last_model"] = effective_default
+        _save_preferences(prefs)
+        print(f"\nSelected model: {effective_default}")
+        return effective_default
 
     try:
         model_num = int(user_input)
         if 1 <= model_num <= len(AVAILABLE_MODELS):
             selected = AVAILABLE_MODELS[model_num - 1]
             print(f"\nSelected model: {selected}")
+            # Save preference
+            prefs["last_model"] = selected
+            _save_preferences(prefs)
             return selected
         else:
-            print(f"Invalid model number. Using default: {MODEL_NAME}")
-            return MODEL_NAME
+            print(f"Invalid model number. Using: {effective_default}")
+            return effective_default
     except ValueError:
-        print(f"Invalid input. Using default: {MODEL_NAME}")
-        return MODEL_NAME
+        print(f"Invalid input. Using: {effective_default}")
+        return effective_default
 
 
 def main() -> None:
