@@ -393,9 +393,6 @@ class MasterData:
     AI only summarizes chunks; Python handles all merging and consolidation.
     """
 
-    DESC_LIMIT = 200
-    SUMMARY_LIMIT = 300
-
     # Patterns to strip from character names
     NAME_PREFIXES = [
         "后妈",
@@ -616,21 +613,53 @@ class MasterData:
 
     def get_items_needing_consolidation(self):
         """Return lists of items with multiple descriptions that need AI consolidation."""
-        chars_to_consolidate = []
-        locs_to_consolidate = []
+        # Re-implementing logic:
+        chars_needing_help = []
+        for key, val in self.characters.items():
+            # Only consolidate if not already consolidated
+            if val["consolidated"] is None:
+                combined = " ".join(val["descriptions"])
+                # Consolidate if length > 300 and multiple parts, or if just excessively long > 500
+                if (len(val["descriptions"]) > 1 and len(combined) > 300) or len(
+                    combined
+                ) > 500:
+                    chars_needing_help.append((key, combined))
 
-        for name, data in self.characters.items():
-            # Consolidate whenever we have 2+ description fragments
-            if data["consolidated"] is None and len(data["descriptions"]) > 1:
-                combined = " ".join(data["descriptions"])
-                chars_to_consolidate.append((name, combined))
+        locs_needing_help = []
+        for key, val in self.locations.items():
+            # Only consolidate if not already consolidated
+            if val["consolidated"] is None:
+                combined = " ".join(val["descriptions"])
+                if (len(val["descriptions"]) > 1 and len(combined) > 300) or len(
+                    combined
+                ) > 500:
+                    locs_needing_help.append((key, combined))
 
-        for name, data in self.locations.items():
-            if data["consolidated"] is None and len(data["descriptions"]) > 1:
-                combined = " ".join(data["descriptions"])
-                locs_to_consolidate.append((name, combined))
+        return chars_needing_help, locs_needing_help
 
-        return chars_to_consolidate, locs_to_consolidate
+    def needs_summary_consolidation(self):
+        """Check if summary needs consolidation."""
+        # Only consolidate if there are multiple parts or if the single part is very long
+        if len(self.summary_parts) > 1:
+            return True
+        elif len(self.summary_parts) == 1:
+            return (
+                len(self.summary_parts[0]) > 1500
+            )  # Consolidate if > 1500 chars (approx 300-500 words)
+        return False
+
+    def consolidate_summary(self, client):
+        """Consolidate accumulated summary parts into one."""
+        if not self.summary_parts:
+            return
+
+        combined = " ".join(self.summary_parts)
+        print(f"  [Summary] Consolidating {len(combined)} chars...")
+
+        consolidated = consolidate_summary_with_ai(client, self.book_title, combined)
+        # Replace parts with the consolidated version
+        self.summary_parts = [consolidated]
+        print(f"  [Summary] Consolidated to {len(consolidated)} chars")
 
     def apply_consolidation(self, entity_type, name, consolidated_desc):
         """Apply AI-consolidated description."""
@@ -659,8 +688,6 @@ class MasterData:
                 desc = data["consolidated"]
             elif data["descriptions"]:
                 desc = " ".join(data["descriptions"])
-                if len(desc) > self.DESC_LIMIT:
-                    desc = desc[: self.DESC_LIMIT - 3] + "..."
             else:
                 desc = ""
 
@@ -684,8 +711,6 @@ class MasterData:
                 desc = data["consolidated"]
             elif data["descriptions"]:
                 desc = " ".join(data["descriptions"])
-                if len(desc) > self.DESC_LIMIT:
-                    desc = desc[: self.DESC_LIMIT - 3] + "..."
             else:
                 desc = ""
 
@@ -702,10 +727,8 @@ class MasterData:
             {"name": l["name"], "description": l["description"]} for l in loc_items
         ]
 
-        # Build summary (join parts, truncate if needed)
+        # Build summary (join parts)
         summary = " ".join(self.summary_parts)
-        if len(summary) > self.SUMMARY_LIMIT:
-            summary = summary[: self.SUMMARY_LIMIT - 3] + "..."
 
         # Build timeline from all events (simple strings now)
         timeline = []
@@ -824,15 +847,42 @@ def consolidate_description_with_ai(client, entity_type, name, combined_desc):
         if content:
             content = content.replace("```json", "").replace("```", "").strip()
             result = json.loads(content)
-            return result.get("description", combined_desc[:200])
+            return result.get("description", combined_desc)
     except Exception as e:
         print(f"    [Consolidation Error] {name}: {e}")
 
-    # Fallback: truncate
-    return combined_desc[:197] + "..." if len(combined_desc) > 200 else combined_desc
+    # Fallback: return original
+    return combined_desc
 
 
-# === Data Cleanup Function ===
+def consolidate_summary_with_ai(client, book_title, combined_summary):
+    """Call AI to consolidate a long summary."""
+    prompt = CONSOLIDATE_SUMMARY_PROMPT % (book_title, combined_summary)
+
+    try:
+        response = call_ai_with_retry(
+            client,
+            MODEL_NAME,
+            [
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=0.3,
+            retries=3,
+        )
+
+        content = response.choices[0].message.content
+        if content:
+            content = content.replace("```json", "").replace("```", "").strip()
+            result = json.loads(content)
+            return result.get("summary", combined_summary)
+    except Exception as e:
+        print(f"    [Summary Consolidation Error]: {e}")
+
+    # Fallback: return original
+    return combined_summary
+
+
 def cleanup_data(data, current_pct):
     """Remove unrequested fields and enforce limits after AI response"""
 
@@ -1490,7 +1540,7 @@ def main():
                 )
                 master.apply_consolidation("character", name, consolidated)
                 print(
-                    f"    ✓ {name}: {len(combined_desc)} -> {len(consolidated)} chars"
+                    f"    ✓ [Char] {name}: {len(combined_desc)} -> {len(consolidated)} chars"
                 )
 
             for name, combined_desc in locs_to_consolidate:
@@ -1499,8 +1549,12 @@ def main():
                 )
                 master.apply_consolidation("location", name, consolidated)
                 print(
-                    f"    ✓ {name}: {len(combined_desc)} -> {len(consolidated)} chars"
+                    f"    ✓ [Loc] {name}: {len(combined_desc)} -> {len(consolidated)} chars"
                 )
+
+        # Check summary consolidation
+        if master.needs_summary_consolidation():
+            master.consolidate_summary(client)
 
         # === STEP 4: Save progress ===
         output_data = master.to_output_json(pct)
