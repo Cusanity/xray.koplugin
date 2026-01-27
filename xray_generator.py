@@ -34,16 +34,18 @@ from typing import Any
 from openai import OpenAI
 
 # =============================================================================
-# Optional Dependencies
+# Required Dependencies
 # =============================================================================
 
 try:
     import opencc
 
-    _T2S_CONVERTER: opencc.OpenCC | None = opencc.OpenCC("t2s")
+    _T2S_CONVERTER = opencc.OpenCC("t2s")
 except ImportError:
-    _T2S_CONVERTER = None
-    print("Note: opencc not installed. Traditional/Simplified deduplication disabled.")
+    print(
+        "Error: opencc is required. Install with: pip install opencc-python-reimplemented"
+    )
+    sys.exit(1)
 
 # =============================================================================
 # Configuration
@@ -293,9 +295,7 @@ def normalize_for_dedup(name: str) -> str:
     """Normalize name for deduplication (convert Traditional to Simplified Chinese)."""
     if not name:
         return name
-    if _T2S_CONVERTER:
-        name = _T2S_CONVERTER.convert(name)
-    return name.strip()
+    return _T2S_CONVERTER.convert(name).strip()
 
 
 def normalize_location_name(name: str) -> str:
@@ -303,9 +303,7 @@ def normalize_location_name(name: str) -> str:
     if not name:
         return name
     name = name.replace("－", "-").replace("—", "-").replace("–", "-")
-    if _T2S_CONVERTER:
-        name = _T2S_CONVERTER.convert(name)
-    return name.strip()
+    return _T2S_CONVERTER.convert(name).strip()
 
 
 # =============================================================================
@@ -528,17 +526,20 @@ class MasterData:
                 continue
 
             desc = char.get("description", "").strip()
-            dedup_key = normalize_for_dedup(name)
+            # Convert to simplified Chinese for both key and display
+            simplified_name = normalize_for_dedup(name)
 
-            if dedup_key not in self.characters:
-                self.characters[dedup_key] = {
-                    "display_name": name,
+            if simplified_name not in self.characters:
+                self.characters[simplified_name] = {
+                    "display_name": simplified_name,
                     "descriptions": [],
                     "consolidated": None,
                 }
             if desc:
-                self.characters[dedup_key]["descriptions"].append(desc)
-                self.characters[dedup_key]["consolidated"] = None
+                # Also convert description to simplified
+                desc = _T2S_CONVERTER.convert(desc)
+                self.characters[simplified_name]["descriptions"].append(desc)
+                self.characters[simplified_name]["consolidated"] = None
 
     def _merge_locations(self, locations: list[dict[str, Any]]) -> None:
         for loc in locations:
@@ -546,17 +547,20 @@ class MasterData:
             if not name:
                 continue
             desc = loc.get("description", "").strip()
-            dedup_key = normalize_location_name(name)
+            # Convert to simplified Chinese for both key and display
+            simplified_name = normalize_location_name(name)
 
-            if dedup_key not in self.locations:
-                self.locations[dedup_key] = {
-                    "display_name": name,
+            if simplified_name not in self.locations:
+                self.locations[simplified_name] = {
+                    "display_name": simplified_name,
                     "descriptions": [],
                     "consolidated": None,
                 }
             if desc:
-                self.locations[dedup_key]["descriptions"].append(desc)
-                self.locations[dedup_key]["consolidated"] = None
+                # Also convert description to simplified
+                desc = _T2S_CONVERTER.convert(desc)
+                self.locations[simplified_name]["descriptions"].append(desc)
+                self.locations[simplified_name]["consolidated"] = None
 
     def _merge_themes(self, themes: list[str]) -> None:
         for theme in themes:
