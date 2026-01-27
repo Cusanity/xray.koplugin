@@ -153,7 +153,8 @@ function XRayPlugin:init()
         h1 { font-size: 1.4em; }
         h2 { font-size: 1.25em; }
         h3 { font-size: 1.1em; }
-        b, strong, em, i { font-weight: normal; font-style: normal; }
+        b, strong { font-weight: bold; }
+        em, i { font-style: normal; }
     ]]
     self.ui.menu:registerToMainMenu(self)
     
@@ -1800,7 +1801,7 @@ function XRayPlugin:showLocationDetails(location)
     -- Add mention count if available
     if location.count or (location.pages and #location.pages > 0) then
         local count = location.count or #location.pages
-        html = html .. "<p><i>" .. self.loc:t("mention_count"):format(count) .. "</i></p>"
+        html = html .. "<p>" .. self.loc:t("mention_count"):format(count) .. "</p>"
     end
     
     self:showHtmlDialog(name, html)
@@ -2364,7 +2365,7 @@ function XRayPlugin:showThemeDetails(theme)
     -- Add mention count if available
     if theme.count or (theme.pages and #theme.pages > 0) then
         local count = theme.count or #theme.pages
-        html = html .. "<p><i>" .. self.loc:t("mention_count"):format(count) .. "</i></p>"
+        html = html .. "<p>" .. self.loc:t("mention_count"):format(count) .. "</p>"
     end
     
     self:showHtmlDialog(name, html)
