@@ -562,6 +562,7 @@ class MasterData:
                 self.characters[simplified_name] = {
                     "display_name": simplified_name,
                     "descriptions": [],
+                    "events": [],
                     "consolidated": None,
                 }
             if desc:
@@ -569,6 +570,27 @@ class MasterData:
                 desc = _T2S_CONVERTER.convert(desc)
                 self.characters[simplified_name]["descriptions"].append(desc)
                 self.characters[simplified_name]["consolidated"] = None
+
+            # Defensive initialization for events if missing (e.g. from old checkpoint)
+            if "events" not in self.characters[simplified_name]:
+                self.characters[simplified_name]["events"] = []
+
+            # Merge events
+            for event in char.get("events", []):
+                if event.get("event") and "absolute_percent" in event:
+                    # Clean up event text: remove trailing percentages like " (22%)" or "（4.5%）"
+                    raw_event = _T2S_CONVERTER.convert(event["event"])
+                    # Match standard () and full-width （）
+                    clean_event = re.sub(
+                        r"\s*[(\uff08]\d+(?:\.\d+)?%[)\uff09]$", "", raw_event
+                    )
+
+                    self.characters[simplified_name]["events"].append(
+                        {
+                            "event": clean_event,
+                            "percent": event["absolute_percent"],
+                        }
+                    )
 
     def _merge_locations(self, locations: list[dict[str, Any]]) -> None:
         for loc in locations:
@@ -689,13 +711,21 @@ class MasterData:
                 {
                     "name": display_name,
                     "description": desc,
+                    "events": sorted(
+                        data.get("events", []), key=lambda x: x["percent"]
+                    ),
                     "_score": score_importance(data),
                 }
             )
 
         char_items.sort(key=lambda x: x["_score"], reverse=True)
         characters = [
-            {"name": c["name"], "description": c["description"]} for c in char_items
+            {
+                "name": c["name"],
+                "description": c["description"],
+                "events": c["events"],
+            }
+            for c in char_items
         ]
 
         # Locations
@@ -1259,6 +1289,7 @@ def restore_master_from_checkpoint(
                 "display_name": name,
                 "descriptions": [char.get("description", "")],
                 "consolidated": char.get("description", ""),
+                "events": char.get("events", []),
             }
 
     for loc in resume_data.get("locations", []):
@@ -1296,56 +1327,77 @@ def process_chunk(
     chunk_text: str,
     title: str,
     author: str,
-    pct: int,
+    start_pct: int,
+    end_pct: int,
     model: str,
 ) -> bool:
     """Process a single chunk through AI and merge into master. Returns True on success."""
     global _current_pct
-    _current_pct = pct
+    _current_pct = end_pct
 
-    prompt = CHUNK_SUMMARY_PROMPT % (title, author, pct, chunk_text)
+    prompt = CHUNK_SUMMARY_PROMPT % (title, author, end_pct, chunk_text)
 
     print(f"  AI Summary... (Prompt len: {len(prompt)})")
 
-    try:
-        response = call_ai_with_retry(
-            client,
-            model,
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=TEMPERATURE,
-            retries=MAX_RETRIES + 1,
-        )
-
-        # Check for truncated response (after all token scaling attempts)
-        if response.choices[0].finish_reason == "length":
-            print("  ⚠ Response still truncated at max tokens. Skipping...")
-            return False
-
-        content = response.choices[0].message.content
-        if content is None:
-            print("  ⚠ Safety filter triggered. Skipping chunk...")
-            return False
-
-        content = content.replace("```json", "").replace("```", "").strip()
-
+    for attempt in range(3):
         try:
-            chunk_data = json.loads(content)
-            master.merge_chunk(chunk_data)
-            stats = master.get_stats()
-            print(
-                f"  [Merged] Chars: {stats['characters']}, Locs: {stats['locations']}, Events: {stats['events']}"
+            response = call_ai_with_retry(
+                client,
+                model,
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=TEMPERATURE,
+                retries=MAX_RETRIES + 1,
             )
-            return True
-        except json.JSONDecodeError as e:
-            print(f"  JSON Error: {e}")
-            return False
 
-    except Exception as e:
-        print(f"  API Error: {e}")
-        return False
+            # Check for truncated response (after all token scaling attempts)
+            if response.choices[0].finish_reason == "length":
+                print("  ⚠ Response still truncated at max tokens. Skipping...")
+                return False
+
+            content = response.choices[0].message.content
+            if content is None:
+                print("  ⚠ Safety filter triggered. Skipping chunk...")
+                return False
+
+            content = content.replace("```json", "").replace("```", "").strip()
+
+            try:
+                chunk_data = json.loads(content)
+
+                # Post-process character events to add absolute percentage
+                for char in chunk_data.get("characters", []):
+                    for event in char.get("events", []):
+                        rel_pct = event.get("relative_percent", 0)
+                        try:
+                            rel_pct = float(rel_pct)
+                        except (ValueError, TypeError):
+                            rel_pct = 0
+
+                        # Interpolate absolute percentage
+                        abs_pct = start_pct + (rel_pct / 100.0) * (end_pct - start_pct)
+                        event["absolute_percent"] = round(abs_pct, 1)
+
+                master.merge_chunk(chunk_data)
+                stats = master.get_stats()
+                print(
+                    f"  [Merged] Chars: {stats['characters']}, Locs: {stats['locations']}, Events: {stats['events']}"
+                )
+                return True
+            except json.JSONDecodeError as e:
+                print(f"  JSON Error (Attempt {attempt + 1}/3): {e}")
+                # Retry on JSON error
+                continue
+
+        except Exception as e:
+            print(f"  API Error (Attempt {attempt + 1}/3): {e}")
+            # Retry on API error as well if it bubbled up
+            continue
+
+    print("  Failed to process chunk after 3 attempts.")
+    return False
 
 
 def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
@@ -1508,17 +1560,27 @@ def main() -> None:
 
         print(f"\n=== Chunk {i}/{total_chunks}: 《{chapter_display}》 ===")
 
-        pct = math.ceil(end_pos * 100 / total_len)
+        # Calculate start and end percentages for this chunk
+        prev_end_pos = chunks[i - 2][2] if i > 1 else 0
+        start_pct = math.floor(prev_end_pos * 100 / total_len)
+        end_pct = math.ceil(end_pos * 100 / total_len)
 
         if not process_chunk(
-            client, master, chunk_text, title, author, pct, selected_model
+            client,
+            master,
+            chunk_text,
+            title,
+            author,
+            start_pct,
+            end_pct,
+            selected_model,
         ):
             continue
 
         consolidate_pending_items(client, master)
 
-        output_data = master.to_output_json(pct)
-        filename = os.path.join(output_dir, f"{pct}%.json")
+        output_data = master.to_output_json(end_pct)
+        filename = os.path.join(output_dir, f"{end_pct}%.json")
         with open(filename, "w", encoding="utf-8") as f:
             json.dump(output_data, f, ensure_ascii=False, indent=2)
         print(f"  Saved {filename}")

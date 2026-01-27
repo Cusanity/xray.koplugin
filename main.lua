@@ -31,7 +31,7 @@ function XRayPlugin:preventSleep(enable)
     end
 end
 
-function XRayPlugin:showHtmlDialog(title, html_content)
+function XRayPlugin:showHtmlDialog(title, html_content, link_callback)
     local UIManager = require("ui/uimanager")
     local ScrollHtmlWidget = require("ui/widget/scrollhtmlwidget")
     local FrameContainer = require("ui/widget/container/framecontainer")
@@ -69,6 +69,7 @@ function XRayPlugin:showHtmlDialog(title, html_content)
         height = height - title_bar:getHeight() - Size.padding.large * 2,
         default_font_size = Screen:scaleBySize(20),
         dialog = nil, -- Will be set later
+        html_link_tapped_callback = link_callback,
     }
     
     -- Shrink-wrap height if content is smaller than max height
@@ -87,6 +88,7 @@ function XRayPlugin:showHtmlDialog(title, html_content)
                 height = safe_height,
                 default_font_size = Screen:scaleBySize(20),
                 dialog = nil,
+                html_link_tapped_callback = link_callback,
             }
         end
     end
@@ -1102,7 +1104,31 @@ function XRayPlugin:showCharacterDetails(character)
         html = html .. "</ul>"
     end
 
-    self:showHtmlDialog(name, html)
+    if character.events and #character.events > 0 then
+         html = html .. "<h3>" .. (self.loc:t("events") or "Events") .. "</h3><ul>"
+         for _, event in ipairs(character.events) do
+             if event.percent then
+                html = html .. "<li><a href='xray://jump/" .. event.percent .. "'>" .. esc(event.event) .. " (" .. event.percent .. "%)</a></li>"
+             else
+                html = html .. "<li>" .. esc(event.event) .. "</li>"
+             end
+         end
+         html = html .. "</ul>"
+    end
+
+    local link_callback = function(link)
+        if link and link.uri and link.uri:find("xray://jump/") then
+            local pct = tonumber(link.uri:match("xray://jump/([%d%.]+)"))
+            if pct then
+                UIManager:close(self.html_dialog)
+                self.html_dialog = nil
+                local Event = require("ui/event")
+                self.ui:handleEvent(Event:new("GotoPercent", pct))
+            end
+        end
+    end
+
+    self:showHtmlDialog(name, html, link_callback)
 end
 
 function XRayPlugin:selectGeminiModel()

@@ -15,3 +15,4 @@ Thumbs.db
 xray/
 __pycache__
 
+.xray_prefs.json
