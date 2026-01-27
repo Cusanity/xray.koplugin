@@ -497,6 +497,43 @@ function XRayPlugin:matchXRayEntity(selected_text)
         logger.info("XRayPlugin: No themes data")
     end
     
+    -- No match in loaded cache - search forward caches for first appearance
+    logger.info("XRayPlugin: No match in loaded cache, searching forward caches...")
+    
+    if not self.cache_manager then
+        local CacheManager = require("cachemanager")
+        self.cache_manager = CacheManager:new()
+    end
+    
+    local book_path = self:getBookPath()
+    if book_path then
+        -- Get current reading progress
+        local _, _, current_progress = self:getReadingProgress()
+        current_progress = current_progress or 0
+        
+        -- Also check the loaded xray_data progress as fallback
+        if self.xray_data and self.xray_data.analysis_progress then
+            current_progress = math.max(current_progress, self.xray_data.analysis_progress)
+        end
+        
+        -- Create a wrapper function that matches the expected signature
+        local matchesEntityFunc = function(norm_text, entity_name, aliases)
+            return self:matchesEntity(norm_text, entity_name, aliases)
+        end
+        
+        local entity, entity_type = self.cache_manager:searchEntityInForwardCaches(
+            book_path, 
+            current_progress, 
+            normalized, 
+            matchesEntityFunc
+        )
+        
+        if entity then
+            logger.info("XRayPlugin: Found entity in forward cache:", entity.name or entity.term or "unknown")
+            return entity, entity_type
+        end
+    end
+    
     logger.info("XRayPlugin: No match found for:", normalized)
     return nil, nil  -- No match found
 end

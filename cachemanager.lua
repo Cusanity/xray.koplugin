@@ -364,4 +364,76 @@ function CacheManager:saveAnalysis(book_path, percent, json_content)
     return false
 end
 
+-- Search for an entity in forward caches (caches with percent > current_percent)
+-- Returns: entity, entity_type, or nil, nil if not found
+function CacheManager:searchEntityInForwardCaches(book_path, current_percent, normalized_text, matchesEntityFunc)
+    if not book_path or not normalized_text or normalized_text == "" then
+        return nil, nil
+    end
+    
+    local caches = self:getAvailableCaches(book_path)
+    if #caches == 0 then 
+        logger.info("CacheManager: No forward caches available")
+        return nil, nil 
+    end
+    
+    -- Filter to only caches with percent > current_percent
+    local forward_caches = {}
+    for _, cache in ipairs(caches) do
+        if cache.percent > current_percent then
+            table.insert(forward_caches, cache)
+        end
+    end
+    
+    if #forward_caches == 0 then
+        logger.info("CacheManager: No caches ahead of current position (" .. current_percent .. "%)")
+        return nil, nil
+    end
+    
+    logger.info("CacheManager: Searching " .. #forward_caches .. " forward caches for: " .. normalized_text)
+    
+    -- Iterate through forward caches in ascending order (already sorted by getAvailableCaches)
+    for _, cache in ipairs(forward_caches) do
+        local content = self:getAnalysis(book_path, cache.percent)
+        if content and content ~= "" then
+            local success, data = pcall(json.decode, content)
+            if success and data then
+                -- Search characters
+                if data.characters then
+                    for _, character in ipairs(data.characters) do
+                        if matchesEntityFunc(normalized_text, character.name, character.aliases) then
+                            logger.info("CacheManager: Found character '" .. character.name .. "' in " .. cache.percent .. "%.json")
+                            return character, "character"
+                        end
+                    end
+                end
+                
+                -- Search locations
+                if data.locations then
+                    for _, location in ipairs(data.locations) do
+                        if matchesEntityFunc(normalized_text, location.name) then
+                            logger.info("CacheManager: Found location '" .. location.name .. "' in " .. cache.percent .. "%.json")
+                            return location, "location"
+                        end
+                    end
+                end
+                
+                -- Search themes
+                if data.themes then
+                    for _, theme in ipairs(data.themes) do
+                        local theme_name = theme.term or theme.name or theme
+                        if type(theme_name) == "string" and matchesEntityFunc(normalized_text, theme_name) then
+                            logger.info("CacheManager: Found theme '" .. theme_name .. "' in " .. cache.percent .. "%.json")
+                            return theme, "theme"
+                        end
+                    end
+                end
+            end
+        end
+    end
+    
+    logger.info("CacheManager: Entity not found in any forward cache")
+    return nil, nil
+end
+
 return CacheManager
