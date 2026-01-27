@@ -1123,6 +1123,9 @@ function XRayPlugin:showCharacterDetails(character)
                 UIManager:close(self.html_dialog)
                 self.html_dialog = nil
                 local Event = require("ui/event")
+                if self.ui.link then
+                    self.ui.link:addCurrentLocationToStack()
+                end
                 self.ui:handleEvent(Event:new("GotoPercent", pct))
             end
         end
