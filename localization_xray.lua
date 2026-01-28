@@ -200,6 +200,8 @@ function Localization:t(key, ...)
             reading_progress = "阅读进度",
             gemini_model_flash_info = "已切换到 Gemini Flash",
             gemini_model_flash_lite_info = "已切换到 Gemini Flash Lite",
+            view_events = "View Events",
+            go_to_location = "Go to Location",
             menu_cloud_sync = "云端同步",
             menu_manage_server = "管理服务器",
             menu_upload_xray = "上传 X-Ray 数据",

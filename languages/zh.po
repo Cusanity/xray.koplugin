@@ -137,6 +137,12 @@ msgstr "查看详情"
 msgid "close"
 msgstr "关闭"
 
+msgid "view_events"
+msgstr "查看事件"
+
+msgid "go_to_location"
+msgstr "跳转至位置"
+
 # ==============================
 # AI SETTINGS & PROVIDERS
 # ==============================
