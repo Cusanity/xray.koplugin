@@ -178,15 +178,9 @@ NAME_SUFFIXES = (
     "堂妹",
 )
 
-SKIP_NAME_PATTERNS = (
-    "的父亲",
-    "的母亲",
-    "的朋友",
-    "的儿子",
-    "的女儿",
-    "的妻子",
-    "的丈夫",
-)
+SKIP_NAME_PATTERNS: tuple[
+    str, ...
+] = ()  # Formerly skipped generic relationships, now allowed for completeness
 
 XML_NS_CONTAINER = {"n": "urn:oasis:names:tc:opendocument:xmlns:container"}
 XML_NS_OPF = {
@@ -301,23 +295,29 @@ def normalize_character_name(name: str) -> str | None:
         return name
 
     original = name
+    # Remove parenthetical content like "Juan (his friend)" -> "Juan"
     name = re.sub(r"[（(][^）)]*[）)]", "", name).strip()
 
-    for pattern in SKIP_NAME_PATTERNS:
-        if pattern in name:
-            return None
-
+    # If the name is a specific case that looks like a relationship but is allowed by AI instruction
+    # (e.g., "Jesús's father"), we should avoid stripping the suffix if it would leave just "X's"
+    potential_name = name
     for prefix in NAME_PREFIXES:
-        if name.startswith(prefix) and len(name) > len(prefix):
-            name = name[len(prefix) :]
-            break
+        if potential_name.startswith(prefix) and len(potential_name) > len(prefix):
+            # Only strip if it doesn't leave something like "的..." (unlikely for prefix)
+            test_name = potential_name[len(prefix) :].strip()
+            if test_name:
+                potential_name = test_name
+                break
 
     for suffix in NAME_SUFFIXES:
-        if name.endswith(suffix) and len(name) > len(suffix):
-            name = name[: -len(suffix)]
-            break
+        if potential_name.endswith(suffix) and len(potential_name) > len(suffix):
+            # Don't strip if it leaves a possessive like "赫苏斯的"
+            test_name = potential_name[: -len(suffix)].strip()
+            if test_name and not test_name.endswith("的"):
+                potential_name = test_name
+                break
 
-    return name.strip() if name.strip() else original
+    return potential_name if potential_name else original
 
 
 def normalize_for_dedup(name: str) -> str:

@@ -38,7 +38,10 @@ function XRayPlugin:showNativeDetails(title, main_text, metadata_items, extra_bu
     local VerticalGroup = require("ui/widget/verticalgroup")
     local WidgetContainer = require("ui/widget/container/widgetcontainer")
     local MovableContainer = require("ui/widget/container/movablecontainer")
-    local Button = require("ui/widget/button")
+    local TitleBar = require("ui/widget/titlebar")
+    local ButtonTable = require("ui/widget/buttontable")
+    local VerticalSpan = require("ui/widget/verticalspan")
+    local CenterContainer = require("ui/widget/container/centercontainer")
     local Geom = require("ui/geometry")
     local Screen = require("device").screen
     local Size = require("ui/size")
@@ -46,129 +49,129 @@ function XRayPlugin:showNativeDetails(title, main_text, metadata_items, extra_bu
     local Blitbuffer = require("ffi/blitbuffer")
     local Font = require("ui/font")
 
-    -- 1. Construct the Main Text content
-    -- If metadata exists, append it to the end of the text with a separator
-    local full_text = main_text or ""
-    
-    if metadata_items and #metadata_items > 0 then
-        full_text = full_text .. "\n\n" .. string.rep("─", 20) .. "\n"
-        for _, item in ipairs(metadata_items) do
-            full_text = full_text .. item .. "\n"
-        end
-    end
-
-    -- 2. Create Title Bar
-    local title_bar = Button:new{
-        text = title,
-        align = "center",
-        width = Screen:getWidth() * 0.9, -- Slightly less than screen width
-        bordersize = 0,
-        padding = Size.padding.medium,
-        text_font_face = "tfont", -- Pass font name as string
-        text_font_size = 22,      -- Pass size separately
-        text_font_bold = true,
-    }
-    
-    -- 3. Create Scroll Text Widget
-    -- Calculate available height: Screen height - margins - title bar
-    local available_height = Screen:getHeight() * 0.7 
-    local available_width = Screen:getWidth() * 0.85
-
-    local scroll_widget = ScrollTextWidget:new{
-        text = full_text,
-        width = available_width,
-        height = available_height,
-        face = Font:getFace("cfont", 20), -- Standard content font
-        alignment = "left",   -- Left aligned for better readability
-        justified = false,    -- No justification to avoid weird spacing
-    }
-    
-    -- 4. Create Close Button (Bottom)
-    local close_button = Button:new{
-        text = self.loc:t("close") or "Close",
-        width = available_width,
-        callback = function()
+    -- 1. Create Title Bar
+    local title_bar = TitleBar:new{
+        width = Screen:getWidth() * 0.85,
+        title = title,
+        with_bottom_line = true,
+        close_callback = function()
             if self.native_dialog then
                 UIManager:close(self.native_dialog)
                 self.native_dialog = nil
                 UIManager:setDirty(nil, "full")
             end
         end,
-        bordersize = 1,
-        padding = Size.padding.default,
+        show_parent = self,
     }
 
-    -- 4.1 Create Extra Buttons Action Group
-    local bottom_buttons = { close_button }
+    local inner_width = title_bar.width
+    local content_padding = Size.padding.large
+
+    -- 2. Create Scroll Text Widget for Description
+    -- We use a fixed percentage of screen height for the scroll area
+    local scroll_height = math.floor(Screen:getHeight() * 0.4)
+    local scroll_widget = ScrollTextWidget:new{
+        text = main_text or "",
+        width = inner_width - 2 * content_padding,
+        height = scroll_height,
+        face = Font:getFace("cfont", 20),
+        alignment = "left",
+        justified = false,
+    }
+
+    -- 3. Metadata Section (Dynamic)
+    local metadata_widgets = {}
+    if metadata_items and #metadata_items > 0 then
+        -- Add a bit of space before metadata
+        table.insert(metadata_widgets, VerticalSpan:new{ width = Size.padding.default })
+        for _, item in ipairs(metadata_items) do
+            table.insert(metadata_widgets, require("ui/widget/textwidget"):new{
+                text = item,
+                face = Font:getFace("xx_smallinfofont", 18),
+                width = inner_width - 2 * content_padding,
+                padding_left = content_padding,
+                padding_right = content_padding,
+            })
+        end
+    end
+
+    -- 4. Actions Section (ButtonTable)
+    local buttons = {}
     
+    -- Extra buttons row(s)
     if extra_buttons and #extra_buttons > 0 then
-         -- Insert extra buttons BEFORE Close button, but we'll stack them in VerticalGroup
-         -- So we just prepend them to the list of widgets in the group
-         for i = #extra_buttons, 1, -1 do
-             local btn_def = extra_buttons[i]
-             local action_btn = Button:new{
+        local row = {}
+        for _, btn_def in ipairs(extra_buttons) do
+            table.insert(row, {
                 text = btn_def.text,
-                width = available_width,
                 callback = function()
                     if self.native_dialog then
                         UIManager:close(self.native_dialog)
                         self.native_dialog = nil
-                        UIManager:setDirty(nil, "full")
                     end
                     if btn_def.callback then
                         btn_def.callback()
                     end
                 end,
-                bordersize = 1,
-                padding = Size.padding.default,
-                margin = 0,
-             }
-             table.insert(bottom_buttons, 1, action_btn)
-         end
+            })
+        end
+        table.insert(buttons, row)
     end
 
-    -- 5. Helper: Separator line
-    local separator = require("ui/widget/linewidget"):new{
-        dimen = Geom:new{ w = available_width, h = 2 },
-        background = Blitbuffer.COLOR_BLACK,
+    -- Close button row
+    table.insert(buttons, {
+        {
+            text = self.loc:t("close") or "Close",
+            callback = function()
+                if self.native_dialog then
+                    UIManager:close(self.native_dialog)
+                    self.native_dialog = nil
+                    UIManager:setDirty(nil, "full")
+                end
+            end,
+        }
+    })
+
+    local button_table = ButtonTable:new{
+        width = inner_width,
+        buttons = buttons,
+        zero_sep = true,
+        show_parent = self,
     }
 
-    -- 6. Layout Container (Frame)
+    -- 5. Layout Container (Frame)
     local frame = FrameContainer:new{
-        padding = Size.padding.large,
+        padding = 0,
         margin = 0,
         background = Blitbuffer.COLOR_WHITE,
-        radius = Size.radius.large,
+        radius = Size.radius.window,
         bordersize = Size.border.window,
         VerticalGroup:new{
             align = "center",
             title_bar,
-            separator,
-            FrameContainer:new{
-                padding = Size.padding.medium,
-                margin = 0,
-                bordersize = 0,
+            VerticalSpan:new{ width = Size.padding.medium },
+            CenterContainer:new{
+                dimen = Geom:new{ w = inner_width, h = scroll_widget:getSize().h },
                 scroll_widget
-            }, -- Container for text padding
+            },
             VerticalGroup:new{
-                align = "center",
-                table.unpack(bottom_buttons)
-            }
+                align = "left",
+                table.unpack(metadata_widgets)
+            },
+            VerticalSpan:new{ width = Size.padding.medium },
+            button_table,
         }
     }
-    
-    -- 7. Movable Container (for centering and handling touches)
-    local movable = MovableContainer:new{
-        frame,
-    }
-    
-    -- 8. Final Dialog Container
+
+    -- 6. Movable and Widget Container
     self.native_dialog = WidgetContainer:new{
         align = "center",
-        dimen = Geom:new{ x=0, y=0, w=Screen:getWidth(), h=Screen:getHeight() },
-        movable,
+        dimen = Screen:getSize(),
+        MovableContainer:new{
+            frame,
+        }
     }
-    
+
     -- Close on tap outside
     self.native_dialog.onTapClose = function(w, ges_ev)
          if ges_ev.pos:notIntersectWith(frame.dimen) then
@@ -177,7 +180,7 @@ function XRayPlugin:showNativeDetails(title, main_text, metadata_items, extra_bu
              return true
          end
     end
-    
+
     -- Link scroll widget to dialog for refreshes
     scroll_widget.dialog = self.native_dialog
     
@@ -1131,56 +1134,7 @@ function XRayPlugin:showCharacters()
     UIManager:show(character_menu)
 end
 
-function XRayPlugin:showCharacterDetails(character)
-    if not character then return end
-    
-    local function esc(s) return (tostring(s or ""):gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")) end
-    
-    local name = esc(character.name or self.loc:t("unnamed_character"))
-    local description = esc(character.description or self.loc:t("no_description"))
-    
-    local html = "<p>" .. description .. "</p>"
-    
-    -- Display dynamic attributes
-    if character.attributes and type(character.attributes) == "table" then
-        html = html .. "<h3>" .. (self.loc:t("details") or "Details") .. "</h3><ul>"
-        for key, value in pairs(character.attributes) do
-            if value and tostring(value) ~= "" then
-                html = html .. "<li><b>" .. esc(key) .. ":</b> " .. esc(value) .. "</li>"
-            end
-        end
-        html = html .. "</ul>"
-    end
-
-    if character.events and #character.events > 0 then
-         html = html .. "<h3>" .. (self.loc:t("events") or "Events") .. "</h3><ul>"
-         for _, event in ipairs(character.events) do
-             if event.percent then
-                html = html .. "<li><a href='xray://jump/" .. event.percent .. "'>" .. esc(event.event) .. " (" .. event.percent .. "%)</a></li>"
-             else
-                html = html .. "<li>" .. esc(event.event) .. "</li>"
-             end
-         end
-         html = html .. "</ul>"
-    end
-
-    local link_callback = function(link)
-        if link and link.uri and link.uri:find("xray://jump/") then
-            local pct = tonumber(link.uri:match("xray://jump/([%d%.]+)"))
-            if pct then
-                UIManager:close(self.html_dialog)
-                self.html_dialog = nil
-                local Event = require("ui/event")
-                if self.ui.link then
-                    self.ui.link:addCurrentLocationToStack()
-                end
-                self.ui:handleEvent(Event:new("GotoPercent", pct))
-            end
-        end
-    end
-
-    self:showHtmlDialog(name, html, link_callback)
-end
+-- showCharacterDetails consolidated to implementation at line 2022
 
 function XRayPlugin:selectGeminiModel()
     if not self.ai_helper then
@@ -1888,20 +1842,18 @@ function XRayPlugin:showAuthorInfo()
         return
     end
     
-    local text = (self.author_info.name or self.loc:t("menu_author_info")) .. "\n\n"
-    text = text .. self.author_info.description .. "\n\n"
+    local title = self.author_info.name or self.loc:t("menu_author_info")
+    local description = self.author_info.description or ""
+    local metadata = {}
     
     if self.author_info.birthDate and #self.author_info.birthDate > 0 then
-        text = text .. self.loc:t("author_birth") .. ": " .. self.author_info.birthDate .. "\n"
+        table.insert(metadata, self.loc:t("author_birth") .. ": " .. self.author_info.birthDate)
     end
     if self.author_info.deathDate and #self.author_info.deathDate > 0 then
-        text = text .. self.loc:t("author_death") .. ": " .. self.author_info.deathDate .. "\n"
+        table.insert(metadata, self.loc:t("author_death") .. ": " .. self.author_info.deathDate)
     end
     
-    UIManager:show(InfoMessage:new{
-        text = text,
-        timeout = 15,
-    })
+    self:showNativeDetails(title, description, metadata)
 end
 
 function XRayPlugin:showAbout()
@@ -2444,10 +2396,11 @@ function XRayPlugin:showSummary()
         return
     end
     
-    UIManager:show(InfoMessage:new{
-        text = self.loc:t("summary_title") .. "\n\n" .. self.summary .. "\n\n(Spoiler-free)", 
-        timeout = 15,
-    })
+    local title = self.loc:t("summary_title") or "Summary"
+    local description = self.summary
+    local metadata = { "(Spoiler-free)" }
+    
+    self:showNativeDetails(title, description, metadata)
 end
 
 function XRayPlugin:showThemes()
