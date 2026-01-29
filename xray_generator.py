@@ -20,6 +20,7 @@ Configuration:
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import math
 import os
@@ -64,6 +65,7 @@ CALIBRE_LIBRARY = os.environ.get(
 MAX_CHUNK_SIZE = 15000
 MAX_RETRIES = 2
 AI_TIMEOUT_SECONDS = 120.0
+MAX_WORKERS = 5
 
 AVAILABLE_MODELS = (
     "gemini-3-flash",
@@ -345,7 +347,7 @@ def call_ai_with_retry(
     model: str,
     messages: list[dict[str, str]],
     temperature: float = 0.3,
-    max_tokens: int = 65536,
+    max_tokens: int = 32768,
     retries: int = 3,
     delay: float = 2.0,
 ) -> Any:
@@ -1330,23 +1332,24 @@ def restore_master_from_checkpoint(
     )
 
 
-def process_chunk(
+def _process_chunk_worker(
     client: OpenAI,
-    master: MasterData,
     chunk_text: str,
     title: str,
     author: str,
     start_pct: int,
     end_pct: int,
     model: str,
-) -> bool:
-    """Process a single chunk through AI and merge into master. Returns True on success."""
-    global _current_pct
-    _current_pct = end_pct
-
+    chunk_index: int,
+    total_chunks: int,
+    chapter_display: str,
+) -> dict[str, Any] | None:
+    """Worker function to process a single chunk independent of master state."""
     prompt = CHUNK_SUMMARY_PROMPT % (title, author, end_pct, chunk_text)
 
-    print(f"  AI Summary... (Prompt len: {len(prompt)})")
+    print(
+        f"  [Chunk {chunk_index}/{total_chunks}] AI Request sent... ({len(prompt)} chars)"
+    )
 
     for attempt in range(3):
         try:
@@ -1361,15 +1364,15 @@ def process_chunk(
                 retries=MAX_RETRIES + 1,
             )
 
-            # Check for truncated response (after all token scaling attempts)
+            # Check for truncated response
             if response.choices[0].finish_reason == "length":
-                print("  ⚠ Response still truncated at max tokens. Skipping...")
-                return False
+                print(f"  [Chunk {chunk_index}] ⚠ Response truncated. Skipping...")
+                return None
 
             content = response.choices[0].message.content
             if content is None:
-                print("  ⚠ Safety filter triggered. Skipping chunk...")
-                return False
+                print(f"  [Chunk {chunk_index}] ⚠ Safety filter triggered. Skipping...")
+                return None
 
             content = content.replace("```json", "").replace("```", "").strip()
 
@@ -1389,52 +1392,60 @@ def process_chunk(
                         abs_pct = start_pct + (rel_pct / 100.0) * (end_pct - start_pct)
                         event["absolute_percent"] = round(abs_pct, 1)
 
-                master.merge_chunk(chunk_data)
-                stats = master.get_stats()
-                print(
-                    f"  [Merged] Chars: {stats['characters']}, Locs: {stats['locations']}, Events: {stats['events']}"
-                )
-                return True
+                print(f"  [Chunk {chunk_index}] ✓ Received AI response")
+                return chunk_data
+
             except json.JSONDecodeError as e:
-                print(f"  JSON Error (Attempt {attempt + 1}/3): {e}")
-                # Retry on JSON error
+                print(
+                    f"  [Chunk {chunk_index}] JSON Error (Attempt {attempt + 1}/3): {e}"
+                )
                 continue
 
         except Exception as e:
-            print(f"  API Error (Attempt {attempt + 1}/3): {e}")
-            # Retry on API error as well if it bubbled up
+            print(f"  [Chunk {chunk_index}] API Error (Attempt {attempt + 1}/3): {e}")
             continue
 
-    print("  Failed to process chunk after 3 attempts.")
-    return False
+    print(f"  [Chunk {chunk_index}] Failed to process after 3 attempts.")
+    return None
 
 
 def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
-    """Check and consolidate items needing AI consolidation."""
+    """Check and consolidate items needing AI consolidation using ThreadPoolExecutor."""
     chars_to_consolidate, locs_to_consolidate = master.get_items_needing_consolidation()
 
-    if chars_to_consolidate or locs_to_consolidate:
-        print(
-            f"  [Consolidation] {len(chars_to_consolidate)} chars, {len(locs_to_consolidate)} locs need merging"
-        )
+    if not chars_to_consolidate and not locs_to_consolidate:
+        if master.needs_summary_consolidation():
+            master.consolidate_summary(client)
+        return
 
+    print(
+        f"  [Consolidation] Parallel processing: {len(chars_to_consolidate)} chars, {len(locs_to_consolidate)} locs"
+    )
+
+    def consolidate_worker(
+        entity_type: str, name: str, desc: str
+    ) -> tuple[str, str, str]:
+        consolidated = consolidate_description_with_ai(client, entity_type, name, desc)
+        return entity_type, name, consolidated
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = []
         for name, combined_desc in chars_to_consolidate:
-            consolidated = consolidate_description_with_ai(
-                client, "character", name, combined_desc
+            futures.append(
+                executor.submit(consolidate_worker, "character", name, combined_desc)
             )
-            master.apply_consolidation("character", name, consolidated)
-            print(
-                f"    ✓ [Char] {name}: {len(combined_desc)} -> {len(consolidated)} chars"
+        for name, combined_desc in locs_to_consolidate:
+            futures.append(
+                executor.submit(consolidate_worker, "location", name, combined_desc)
             )
 
-        for name, combined_desc in locs_to_consolidate:
-            consolidated = consolidate_description_with_ai(
-                client, "location", name, combined_desc
-            )
-            master.apply_consolidation("location", name, consolidated)
-            print(
-                f"    ✓ [Loc] {name}: {len(combined_desc)} -> {len(consolidated)} chars"
-            )
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                etype, name, consolidated = future.result()
+                master.apply_consolidation(etype, name, consolidated)
+                print(f"    ✓ [{etype[:4].capitalize()}] {name} updated")
+            except Exception as e:
+                print(f"    [Consolidation Error]: {e}")
 
     if master.needs_summary_consolidation():
         master.consolidate_summary(client)
@@ -1554,45 +1565,93 @@ def main() -> None:
     if start_step is None:
         return
 
-    print(f"\n=== Starting Analysis with Python-Maintained Data Architecture ===")
+    print("\n=== Starting Analysis with Python-Maintained Data Architecture ===")
+    print(f"    (Parallel Execution with {MAX_WORKERS} workers)")
 
+    # Prepare chunk parameters list
+    chunk_tasks = []
     for i in range(start_step, total_chunks + 1):
         chapter_titles, chunk_text, end_pos = chunks[i - 1]
-
-        chapter_display = (
-            " → ".join(chapter_titles) if len(chapter_titles) > 1 else chapter_titles[0]
-        )
-
-        if not chunk_text.strip():
-            print(f"Skipping empty chunk ({i}/{total_chunks})")
-            continue
-
-        print(f"\n=== Chunk {i}/{total_chunks}: 《{chapter_display}》 ===")
 
         # Calculate start and end percentages for this chunk
         prev_end_pos = chunks[i - 2][2] if i > 1 else 0
         start_pct = math.floor(prev_end_pos * 100 / total_len)
         end_pct = math.ceil(end_pos * 100 / total_len)
 
-        if not process_chunk(
-            client,
-            master,
-            chunk_text,
-            title,
-            author,
-            start_pct,
-            end_pct,
-            selected_model,
-        ):
-            continue
+        chapter_display = (
+            " → ".join(chapter_titles) if len(chapter_titles) > 1 else chapter_titles[0]
+        )
 
-        consolidate_pending_items(client, master)
+        chunk_tasks.append(
+            {
+                "chunk_index": i,
+                "chunk_text": chunk_text,
+                "title": title,
+                "author": author,
+                "start_pct": start_pct,
+                "end_pct": end_pct,
+                "chapter_display": chapter_display,
+            }
+        )
 
-        output_data = master.to_output_json(end_pct)
-        filename = os.path.join(output_dir, f"{end_pct}%.json")
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(output_data, f, ensure_ascii=False, indent=2)
-        print(f"  Saved {filename}")
+    # Execute chunks in parallel but merge in order
+    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Submit all tasks
+        futures = {}
+        for task in chunk_tasks:
+            if not task["chunk_text"].strip():
+                print(f"Skipping empty chunk ({task['chunk_index']}/{total_chunks})")
+                continue
+
+            future = executor.submit(
+                _process_chunk_worker,
+                client,
+                task["chunk_text"],
+                task["title"],
+                task["author"],
+                task["start_pct"],
+                task["end_pct"],
+                selected_model,
+                task["chunk_index"],
+                total_chunks,
+                task["chapter_display"],
+            )
+            futures[task["chunk_index"]] = future
+
+        # Process results in order to maintain sequential data integrity
+        for task in chunk_tasks:
+            idx = task["chunk_index"]
+            if idx not in futures:
+                continue
+
+            future = futures[idx]
+            try:
+                chunk_data = future.result()
+                if chunk_data:
+                    # Sequential Merge
+                    print(
+                        f"\n=== Merging Chunk {idx}/{total_chunks}: 《{task['chapter_display']}》 ==="
+                    )
+                    master.merge_chunk(chunk_data)
+
+                    stats = master.get_stats()
+                    print(
+                        f"  [Merged] Chars: {stats['characters']}, Locs: {stats['locations']}, Events: {stats['events']}"
+                    )
+
+                    # Intermediate consolidation to keep checkpoints clean
+                    consolidate_pending_items(client, master)
+
+                    # Save Checkpoint
+                    output_data = master.to_output_json(task["end_pct"])
+                    filename = os.path.join(output_dir, f"{task['end_pct']}%.json")
+                    with open(filename, "w", encoding="utf-8") as f:
+                        json.dump(output_data, f, ensure_ascii=False, indent=2)
+                    print(f"  Saved {filename}")
+                else:
+                    print(f"  [Chunk {idx}] Skipped due to AI failure/filtering.")
+            except Exception as e:
+                print(f"  [Chunk {idx}] Fatal Error in worker: {e}")
 
     _finalize_output(master, output_dir)
 
