@@ -565,11 +565,19 @@ class MasterData:
                     "events": [],
                     "consolidated": None,
                 }
+
+            # If we already have a consolidated description, move it back to fragments
+            # so the next consolidation pass includes it as context.
+            if self.characters[simplified_name]["consolidated"]:
+                self.characters[simplified_name]["descriptions"].insert(
+                    0, self.characters[simplified_name]["consolidated"]
+                )
+                self.characters[simplified_name]["consolidated"] = None
+
             if desc:
                 # Also convert description to simplified
                 desc = _T2S_CONVERTER.convert(desc)
                 self.characters[simplified_name]["descriptions"].append(desc)
-                self.characters[simplified_name]["consolidated"] = None
 
             # Defensive initialization for events if missing (e.g. from old checkpoint)
             if "events" not in self.characters[simplified_name]:
@@ -607,11 +615,18 @@ class MasterData:
                     "descriptions": [],
                     "consolidated": None,
                 }
+
+            # If we already have a consolidated description, move it back to fragments
+            if self.locations[simplified_name]["consolidated"]:
+                self.locations[simplified_name]["descriptions"].insert(
+                    0, self.locations[simplified_name]["consolidated"]
+                )
+                self.locations[simplified_name]["consolidated"] = None
+
             if desc:
                 # Also convert description to simplified
                 desc = _T2S_CONVERTER.convert(desc)
                 self.locations[simplified_name]["descriptions"].append(desc)
-                self.locations[simplified_name]["consolidated"] = None
 
     def _merge_themes(self, themes: list[str]) -> None:
         for theme in themes:
@@ -644,21 +659,15 @@ class MasterData:
         """Return lists of items with multiple descriptions that need AI consolidation."""
         chars_needing_help = []
         for key, val in self.characters.items():
-            if val["consolidated"] is None:
+            if val["consolidated"] is None and len(val["descriptions"]) > 1:
                 combined = " ".join(val["descriptions"])
-                if (len(val["descriptions"]) > 1 and len(combined) > 300) or len(
-                    combined
-                ) > 500:
-                    chars_needing_help.append((key, combined))
+                chars_needing_help.append((key, combined))
 
         locs_needing_help = []
         for key, val in self.locations.items():
-            if val["consolidated"] is None:
+            if val["consolidated"] is None and len(val["descriptions"]) > 1:
                 combined = " ".join(val["descriptions"])
-                if (len(val["descriptions"]) > 1 and len(combined) > 300) or len(
-                    combined
-                ) > 500:
-                    locs_needing_help.append((key, combined))
+                locs_needing_help.append((key, combined))
 
         return chars_needing_help, locs_needing_help
 
