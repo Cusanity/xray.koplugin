@@ -72,7 +72,6 @@ AVAILABLE_MODELS = (
     "gemini-3-flash",
     "gemini-3-pro-low",
     "gemini-3-pro-high",
-    "gemini-2.5-flash",
     "claude-sonnet-4-5",
     "claude-opus-4-5-thinking",
 )
@@ -402,6 +401,19 @@ def call_ai_with_retry(
             )
             return response
         except Exception as e:
+            error_str = str(e)
+            # Check for specific 403 Gemini subscription errors
+            if (
+                "SUBSCRIPTION_REQUIRED" in error_str
+                or "Gemini Code Assist license" in error_str
+                or "3501" in error_str
+            ):
+                print(
+                    f"\nGemini Code Assist license required. Last error: HTTP 403: {error_str}"
+                )
+                # Use os._exit to immediately kill all threads and the process
+                os._exit(1)
+
             if attempt == retries - 1:
                 print(f"    [AI Error] Final attempt failed: {e}")
                 raise
