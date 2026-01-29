@@ -69,6 +69,7 @@ MAX_WORKERS = 5
 
 AVAILABLE_MODELS = (
     "gemini-3-flash",
+    "gemini-3-pro-low",
     "gemini-3-pro-high",
     "gemini-2.5-flash",
     "claude-sonnet-4-5",
@@ -375,6 +376,21 @@ def call_ai_with_retry(
             current_delay *= 2
 
 
+def get_fallback_model_iterator(start_model: str) -> Any:
+    """Yield models starting from start_model, then cycling through others."""
+    start_idx = 0
+    if start_model in AVAILABLE_MODELS:
+        start_idx = AVAILABLE_MODELS.index(start_model)
+
+    # First yield the selected model
+    yield start_model
+
+    # Then yield subsequent models
+    for i in range(1, len(AVAILABLE_MODELS)):
+        idx = (start_idx + i) % len(AVAILABLE_MODELS)
+        yield AVAILABLE_MODELS[idx]
+
+
 def consolidate_description_with_ai(
     client: OpenAI,
     entity_type: str,
@@ -385,24 +401,33 @@ def consolidate_description_with_ai(
     type_cn = "人物" if entity_type == "character" else "地点"
     prompt = CONSOLIDATE_DESC_PROMPT % (type_cn, name, combined_desc)
 
-    try:
-        response = call_ai_with_retry(
-            client,
-            _selected_model,
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.3,
-            retries=3,
-        )
-        content = response.choices[0].message.content
-        if content:
-            content = content.replace("```json", "").replace("```", "").strip()
-            result = json.loads(content)
-            return result.get("description", combined_desc)
-    except Exception as e:
-        print(f"    [Consolidation Error] {name}: {e}")
+    model_iterator = get_fallback_model_iterator(_selected_model)
+
+    for current_model in model_iterator:
+        try:
+            response = call_ai_with_retry(
+                client,
+                current_model,
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                retries=3,
+            )
+            content = response.choices[0].message.content
+            if content:
+                content = content.replace("```json", "").replace("```", "").strip()
+                result = json.loads(content)
+                return result.get("description", combined_desc)
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                print(f"    [Consolidation Error] 429 on {current_model}. Switching...")
+                continue
+            print(f"    [Consolidation Error] {name} on {current_model}: {e}")
+            continue
+
     return combined_desc
 
 
@@ -412,24 +437,33 @@ def consolidate_summary_with_ai(
     """Call AI to consolidate a long summary."""
     prompt = CONSOLIDATE_SUMMARY_PROMPT % (book_title, combined_summary)
 
-    try:
-        response = call_ai_with_retry(
-            client,
-            _selected_model,
-            [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.3,
-            retries=3,
-        )
-        content = response.choices[0].message.content
-        if content:
-            content = content.replace("```json", "").replace("```", "").strip()
-            result = json.loads(content)
-            return result.get("summary", combined_summary)
-    except Exception as e:
-        print(f"    [Summary Consolidation Error]: {e}")
+    model_iterator = get_fallback_model_iterator(_selected_model)
+
+    for current_model in model_iterator:
+        try:
+            response = call_ai_with_retry(
+                client,
+                current_model,
+                [
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                retries=3,
+            )
+            content = response.choices[0].message.content
+            if content:
+                content = content.replace("```json", "").replace("```", "").strip()
+                result = json.loads(content)
+                return result.get("summary", combined_summary)
+        except Exception as e:
+            error_str = str(e)
+            if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                print(
+                    f"    [Summary Consolidation Error] 429 on {current_model}. Switching..."
+                )
+                continue
+            print(f"    [Summary Consolidation Error]: {e}")
     return combined_summary
 
 
@@ -1351,61 +1385,99 @@ def _process_chunk_worker(
         f"  [Chunk {chunk_index}/{total_chunks}] AI Request sent... ({len(prompt)} chars)"
     )
 
-    for attempt in range(3):
-        try:
-            response = call_ai_with_retry(
-                client,
-                model,
-                [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=TEMPERATURE,
-                retries=MAX_RETRIES + 1,
+    # Retrieve global list of models, start with the user-selected one
+    model_iterator = get_fallback_model_iterator(model)
+
+    for current_model in model_iterator:
+        if current_model != model:
+            print(
+                f"  [Chunk {chunk_index}] ⚠ Switching to fallback model: {current_model}"
             )
 
-            # Check for truncated response
-            if response.choices[0].finish_reason == "length":
-                print(f"  [Chunk {chunk_index}] ⚠ Response truncated. Skipping...")
-                return None
-
-            content = response.choices[0].message.content
-            if content is None:
-                print(f"  [Chunk {chunk_index}] ⚠ Safety filter triggered. Skipping...")
-                return None
-
-            content = content.replace("```json", "").replace("```", "").strip()
-
+        for attempt in range(3):
             try:
-                chunk_data = json.loads(content)
-
-                # Post-process character events to add absolute percentage
-                for char in chunk_data.get("characters", []):
-                    for event in char.get("events", []):
-                        rel_pct = event.get("relative_percent", 0)
-                        try:
-                            rel_pct = float(rel_pct)
-                        except (ValueError, TypeError):
-                            rel_pct = 0
-
-                        # Interpolate absolute percentage
-                        abs_pct = start_pct + (rel_pct / 100.0) * (end_pct - start_pct)
-                        event["absolute_percent"] = round(abs_pct, 1)
-
-                print(f"  [Chunk {chunk_index}] ✓ Received AI response")
-                return chunk_data
-
-            except json.JSONDecodeError as e:
-                print(
-                    f"  [Chunk {chunk_index}] JSON Error (Attempt {attempt + 1}/3): {e}"
+                response = call_ai_with_retry(
+                    client,
+                    current_model,
+                    [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=TEMPERATURE,
+                    retries=MAX_RETRIES + 1,
                 )
+
+                # Check for truncated response
+                if response.choices[0].finish_reason == "length":
+                    print(f"  [Chunk {chunk_index}] ⚠ Response truncated. Skipping...")
+                    # Try next model just in case context limit is the issue
+                    break
+
+                content = response.choices[0].message.content
+                if content is None:
+                    print(
+                        f"  [Chunk {chunk_index}] ⚠ Safety filter triggered. Skipping..."
+                    )
+                    break
+
+                content = content.replace("```json", "").replace("```", "").strip()
+
+                try:
+                    chunk_data = json.loads(content)
+
+                    # Post-process character events to add absolute percentage
+                    for char in chunk_data.get("characters", []):
+                        for event in char.get("events", []):
+                            rel_pct = event.get("relative_percent", 0)
+                            try:
+                                rel_pct = float(rel_pct)
+                            except (ValueError, TypeError):
+                                rel_pct = 0
+
+                            # Interpolate absolute percentage
+                            abs_pct = start_pct + (rel_pct / 100.0) * (
+                                end_pct - start_pct
+                            )
+                            event["absolute_percent"] = round(abs_pct, 1)
+
+                    print(f"  [Chunk {chunk_index}] ✓ Received AI response")
+                    return chunk_data
+
+                except json.JSONDecodeError as e:
+                    print(
+                        f"  [Chunk {chunk_index}] JSON Error (Attempt {attempt + 1}/3): {e}"
+                    )
+                    # If this is the last attempt and we still fail JSON, break to outer loop to try next model
+                    if attempt == 2:
+                        print(
+                            f"  [Chunk {chunk_index}] ⚠ JSON Parsing failed persistently on {current_model}."
+                        )
+                    continue
+
+            except Exception as e:
+                # Check for 429 explicitly
+                error_str = str(e)
+                if "429" in error_str or "RESOURCE_EXHAUSTED" in error_str:
+                    print(
+                        f"  [Chunk {chunk_index}] ⚠ Rate Limit (429) on {current_model}. Switching model immediately..."
+                    )
+                    break  # Break inner loop to switch model
+
+                print(
+                    f"  [Chunk {chunk_index}] API Error (Attempt {attempt + 1}/3): {e}"
+                )
+
+                # If persistent error on last attempt, break to switch model
+                if attempt == 2:
+                    print(
+                        f"  [Chunk {chunk_index}] ⚠ Persistent API errors on {current_model}."
+                    )
                 continue
 
-        except Exception as e:
-            print(f"  [Chunk {chunk_index}] API Error (Attempt {attempt + 1}/3): {e}")
-            continue
-
-    print(f"  [Chunk {chunk_index}] Failed to process after 3 attempts.")
+    # If we exhausted all models
+    print(
+        f"  [Chunk {chunk_index}] Failed to process chunk after failing over all models."
+    )
     return None
 
 
