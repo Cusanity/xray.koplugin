@@ -21,6 +21,7 @@ Configuration:
 from __future__ import annotations
 
 import concurrent.futures
+import hashlib
 import json
 import math
 import os
@@ -229,6 +230,41 @@ _ai_client: OpenAI | None = None
 _selected_model: str = ""
 _book_title: str = ""
 _current_pct: int = 0
+_cache_dir: str | None = None
+
+
+def get_ai_cache(prompt: str) -> dict[str, Any] | None:
+    """Check if AI response for prompt is cached."""
+    if not _cache_dir:
+        return None
+
+    prompt_hash = hashlib.md5(prompt.encode("utf-8")).hexdigest()
+    cache_file = os.path.join(_cache_dir, f"{prompt_hash}.json")
+
+    if os.path.exists(cache_file):
+        try:
+            with open(cache_file, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+
+def save_ai_cache(prompt: str, response_data: dict[str, Any]) -> None:
+    """Save AI response to cache."""
+    if not _cache_dir:
+        return
+
+    prompt_hash = hashlib.md5(prompt.encode("utf-8")).hexdigest()
+    cache_file = os.path.join(_cache_dir, f"{prompt_hash}.json")
+
+    try:
+        os.makedirs(_cache_dir, exist_ok=True)
+        with open(cache_file, "w", encoding="utf-8") as f:
+            json.dump(response_data, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"Warning: Failed to save AI cache: {e}")
+
 
 # =============================================================================
 # Prompt Loading
@@ -401,6 +437,10 @@ def consolidate_description_with_ai(
     type_cn = "人物" if entity_type == "character" else "地点"
     prompt = CONSOLIDATE_DESC_PROMPT % (type_cn, name, combined_desc)
 
+    cached_data = get_ai_cache(prompt)
+    if cached_data:
+        return cached_data.get("description", combined_desc)
+
     model_iterator = get_fallback_model_iterator(_selected_model)
 
     for current_model in model_iterator:
@@ -419,6 +459,7 @@ def consolidate_description_with_ai(
             if content:
                 content = content.replace("```json", "").replace("```", "").strip()
                 result = json.loads(content)
+                save_ai_cache(prompt, result)
                 return result.get("description", combined_desc)
         except Exception as e:
             error_str = str(e)
@@ -437,6 +478,10 @@ def consolidate_summary_with_ai(
     """Call AI to consolidate a long summary."""
     prompt = CONSOLIDATE_SUMMARY_PROMPT % (book_title, combined_summary)
 
+    cached_data = get_ai_cache(prompt)
+    if cached_data:
+        return cached_data.get("summary", combined_summary)
+
     model_iterator = get_fallback_model_iterator(_selected_model)
 
     for current_model in model_iterator:
@@ -455,6 +500,7 @@ def consolidate_summary_with_ai(
             if content:
                 content = content.replace("```json", "").replace("```", "").strip()
                 result = json.loads(content)
+                save_ai_cache(prompt, result)
                 return result.get("summary", combined_summary)
         except Exception as e:
             error_str = str(e)
@@ -1381,6 +1427,22 @@ def _process_chunk_worker(
     """Worker function to process a single chunk independent of master state."""
     prompt = CHUNK_SUMMARY_PROMPT % (title, author, end_pct, chunk_text)
 
+    # Check cache first
+    cached_data = get_ai_cache(prompt)
+    if cached_data:
+        print(f"  [Chunk {chunk_index}] ✓ Using cached AI response")
+        # Re-calculate absolute percentages for consistent data mapping
+        for char in cached_data.get("characters", []):
+            for event in char.get("events", []):
+                rel_pct = event.get("relative_percent", 0)
+                try:
+                    rel_pct = float(rel_pct)
+                except (ValueError, TypeError):
+                    rel_pct = 0
+                abs_pct = start_pct + (rel_pct / 100.0) * (end_pct - start_pct)
+                event["absolute_percent"] = round(abs_pct, 1)
+        return cached_data
+
     print(
         f"  [Chunk {chunk_index}/{total_chunks}] AI Request sent... ({len(prompt)} chars)"
     )
@@ -1424,6 +1486,7 @@ def _process_chunk_worker(
 
                 try:
                     chunk_data = json.loads(content)
+                    save_ai_cache(prompt, chunk_data)
 
                     # Post-process character events to add absolute percentage
                     for char in chunk_data.get("characters", []):
@@ -1585,7 +1648,7 @@ def display_model_selector() -> str | None:
 
 
 def main() -> None:
-    global _ai_client, _book_title, _selected_model
+    global _ai_client, _book_title, _selected_model, _cache_dir
 
     target_path = _get_target_path()
     if target_path is None:
@@ -1616,6 +1679,9 @@ def main() -> None:
     output_dir = _setup_output_directory(target_path)
     if output_dir is None:
         return
+
+    _cache_dir = os.path.join(output_dir, "ai_cache")
+    os.makedirs(_cache_dir, exist_ok=True)
 
     resume_pct, resume_data = find_resume_checkpoint(output_dir)
 
