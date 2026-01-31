@@ -975,48 +975,76 @@ def display_library_browser(
         print("No books found in Calibre library.")
         return None
 
-    total = len(books)
-    total_pages = (total + page_size - 1) // page_size
+    # Use a copy of the books list that can be filtered
+    all_books = books
+    filtered_books = all_books
+    search_query = ""
 
     # Load last selection preferences
     prefs = _load_preferences()
     last_book_path = prefs.get("last_book_path", "")
     last_book_num = prefs.get("last_book_num", 0)
 
-    # Find the page containing the last selected book
+    # Find the page containing the last selected book (if no filter is active)
     current_page = 0
     if last_book_path:
-        for i, book in enumerate(books):
+        for i, book in enumerate(all_books):
             if book["epub_path"] == last_book_path:
                 current_page = i // page_size
                 last_book_num = i + 1
                 break
 
     while True:
+        total = len(filtered_books)
+        total_pages = (total + page_size - 1) // page_size if total > 0 else 1
+        current_page = max(0, min(current_page, total_pages - 1))
+
         start_idx = current_page * page_size
         end_idx = min(start_idx + page_size, total)
 
         print(f"\n{'=' * 60}")
-        print(
+        header = (
             f"Calibre Library - Page {current_page + 1}/{total_pages} ({total} books)"
         )
+        if search_query:
+            header += f" | Filter: '{search_query}'"
+        print(header)
         print(f"{'=' * 60}\n")
 
-        for i in range(start_idx, end_idx):
-            book = books[i]
-            display_title = (
-                book["title"][:42] + "..." if len(book["title"]) > 45 else book["title"]
-            )
-            # Mark last selected book
-            marker = " *" if i + 1 == last_book_num else ""
-            print(f"  [{i + 1:3d}] {display_title}{marker}")
-            print(f"        by {book['author']}")
+        if total == 0:
+            print("  No books match your search.")
+        else:
+            for i in range(start_idx, end_idx):
+                book = filtered_books[i]
+                display_title = (
+                    book["title"][:42] + "..."
+                    if len(book["title"]) > 45
+                    else book["title"]
+                )
+                # Mark last selected book (only if it matches the current filtered list and path)
+                marker = ""
+                if last_book_path == book["epub_path"]:
+                    marker = " *"
+
+                print(f"  [{i + 1:3d}] {display_title}{marker}")
+                print(f"        by {book['author']}")
 
         print(f"\n{'─' * 60}")
         hint = ""
-        if last_book_num > 0:
-            hint = f" [Enter={last_book_num}]"
-        print(f"Commands: [n]ext page, [p]rev page, [q]uit, or enter book number{hint}")
+        # Only suggest last book if it's in the CURRENT filtered view
+        current_last_book_idx = -1
+        if last_book_path:
+            for i, b in enumerate(filtered_books):
+                if b["epub_path"] == last_book_path:
+                    current_last_book_idx = i
+                    break
+
+        if current_last_book_idx != -1:
+            hint = f" [Enter={current_last_book_idx + 1}]"
+
+        print(
+            f"Commands: [n]ext, [p]rev, [s]earch, [c]lear search, [q]uit, or # {hint}"
+        )
 
         try:
             user_input = input("\n> ").strip().lower()
@@ -1031,26 +1059,49 @@ def display_library_browser(
             current_page += 1
         elif user_input == "p" and current_page > 0:
             current_page -= 1
-        elif not user_input and last_book_num > 0:
+        elif user_input == "s":
+            query = input("Enter search term (title or author): ").strip()
+            if query:
+                search_query = query
+                filtered_books = [
+                    b
+                    for b in all_books
+                    if query.lower() in b["title"].lower()
+                    or query.lower() in b["author"].lower()
+                ]
+                current_page = 0
+            else:
+                print("Search cancelled.")
+        elif user_input == "c":
+            search_query = ""
+            filtered_books = all_books
+            print("Filter cleared.")
+        elif not user_input and current_last_book_idx != -1:
             # Press Enter to select last book
-            selected = books[last_book_num - 1]
+            selected = filtered_books[current_last_book_idx]
             print(f"\nSelected: {selected['title']} by {selected['author']}")
             return selected["epub_path"]
         else:
             try:
                 book_num = int(user_input)
                 if 1 <= book_num <= total:
-                    selected = books[book_num - 1]
+                    selected = filtered_books[book_num - 1]
                     print(f"\nSelected: {selected['title']} by {selected['author']}")
                     # Save preference
                     prefs["last_book_path"] = selected["epub_path"]
-                    prefs["last_book_num"] = book_num
+                    # We store global index in refs for next startup?
+                    # Actually last_book_num was global index.
+                    # Let's find global index for saving.
+                    for global_idx, b in enumerate(all_books):
+                        if b["epub_path"] == selected["epub_path"]:
+                            prefs["last_book_num"] = global_idx + 1
+                            break
                     _save_preferences(prefs)
                     return selected["epub_path"]
                 else:
                     print(f"Invalid book number. Enter 1-{total}.")
             except ValueError:
-                print("Invalid input. Enter a book number, n, p, or q.")
+                print("Invalid input. Enter a book number, n, p, s, c, or q.")
 
 
 # =============================================================================
