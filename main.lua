@@ -185,6 +185,7 @@ function XRayPlugin:showNativeDetails(title, main_text, metadata_items, extra_bu
     scroll_widget.dialog = self.native_dialog
     
     UIManager:show(self.native_dialog)
+    UIManager:setDirty(nil, "full")
 end
 
 -- Deprecated: Kept as alias if needed, but redirects to native
