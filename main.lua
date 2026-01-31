@@ -897,6 +897,7 @@ function XRayPlugin:getXRaySubMenuItems()
         items[#items].separator = true
     end
 
+    --[[
     table.insert(items, {
         text = self.loc:t("menu_fetch_ai"),
         keep_menu_open = true,
@@ -967,6 +968,7 @@ function XRayPlugin:getXRaySubMenuItems()
             },
         }
     })
+    --]]
 
     table.insert(items, {
         text = self.loc:t("menu_view_options") or "View Options",
