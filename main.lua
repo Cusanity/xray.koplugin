@@ -195,8 +195,30 @@ function XRayPlugin:showHtmlDialog(title, content)
     self:showNativeDetails(title, clean_text)
 end
 
-function XRayPlugin:init()
+function XRayPlugin:loadSettings()
+    self.settings = self.settings or {}
+    local function read_bool(key, default)
+        local val = G_reader_settings:readSetting(key)
+        if val == nil then return default end
+        return val
+    end
 
+    self.settings.show_characters = read_bool("xray_show_characters", true)
+    self.settings.show_chapter_characters = read_bool("xray_show_chapter_characters", true)
+    self.settings.show_character_notes = read_bool("xray_show_character_notes", true)
+    self.settings.show_timeline = read_bool("xray_show_timeline", true)
+    self.settings.show_historical_figures = read_bool("xray_show_historical_figures", true)
+    self.settings.show_locations = read_bool("xray_show_locations", true)
+    self.settings.show_spoilers = read_bool("xray_show_spoilers", false)
+    self.settings.show_themes = read_bool("xray_show_themes", true)
+    self.settings.show_summary = read_bool("xray_show_summary", true)
+    self.settings.show_author_info = read_bool("xray_show_author_info", true)
+    
+    self.settings.sync_server = G_reader_settings:readSetting("xray_sync_server")
+end
+
+function XRayPlugin:init()
+    self:loadSettings()
     
     -- CSS for HTML viewer
     self.css = [[
@@ -773,192 +795,234 @@ function XRayPlugin:getXRaySubMenuItems()
         self.loc:t("menu_xray_progress"), percentage,
         self.loc:t("reading_progress"), reading_progress)
     
-    return {
-        {
-            text = info_text,
-            enabled = false, -- Info only
-        },
-        {
+    local items = {}
+    
+    table.insert(items, {
+        text = info_text,
+        enabled = false, -- Info only
+    })
+    
+    if self.settings.show_characters then
+        table.insert(items, {
             text = self.loc:t("menu_characters") .. (counts.characters > 0 and " (" .. counts.characters .. ")" or ""),
             keep_menu_open = true,
             callback = function()
                 self:showCharacters()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_chapter_characters then
+        table.insert(items, {
             text = self.loc:t("menu_chapter_characters"),
             keep_menu_open = true,
             callback = function()
                 self:showChapterCharacters()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_character_notes then
+        table.insert(items, {
             text = self.loc:t("menu_character_notes"),
             keep_menu_open = true,
             callback = function()
                 self:showCharacterNotes()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_timeline then
+        table.insert(items, {
             text = self.loc:t("menu_timeline") .. (counts.timeline > 0 and " (" .. counts.timeline .. " " .. self.loc:t("events") .. ")" or ""),
             keep_menu_open = true,
             callback = function()
                 self:showTimeline()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_historical_figures then
+        table.insert(items, {
             text = self.loc:t("menu_historical_figures") .. (counts.historical_figures > 0 and " (" .. counts.historical_figures .. ")" or ""),
             keep_menu_open = true,
             callback = function()
                 self:showHistoricalFigures()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_locations then
+        table.insert(items, {
             text = self.loc:t("menu_locations") .. (counts.locations > 0 and " (" .. counts.locations .. ")" or ""),
             keep_menu_open = true,
             callback = function()
                 self:showLocations()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_author_info then
+        table.insert(items, {
             text = self.loc:t("menu_author_info"),
             keep_menu_open = true,
             callback = function()
                 self:showAuthorInfo()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_summary then
+        table.insert(items, {
             text = self.loc:t("menu_summary"),
             keep_menu_open = true,
             callback = function()
                 self:showSummary()
             end,
-        },
-        {
+        })
+    end
+
+    if self.settings.show_themes then
+        table.insert(items, {
             text = self.loc:t("menu_themes") .. (counts.themes > 0 and " (" .. counts.themes .. ")" or ""),
             keep_menu_open = true,
             callback = function()
                 self:showThemes()
             end,
-        },
-        {
-            text = self.loc:t("menu_fetch_ai"),
-            keep_menu_open = true,
-            callback = function()
-                self:fetchFromAI()
-            end,
-        },
-        {
-            text = self.loc:t("menu_ai_settings"),
-            keep_menu_open = true,
-            sub_item_table = {
-                {
-                    text = self.loc:t("menu_gemini_key"), 
-                    keep_menu_open = true,
-                    callback = function()
-                        self:setGeminiAPIKey()
-                    end,
-                },
-                {
-                    text = self.loc:t("menu_gemini_model"), 
-                    keep_menu_open = true,
-                    callback = function()
-                        self:selectGeminiModel()
-                    end,
-                },
-                {
-                    text = self.loc:t("menu_chatgpt_key"), 
-                    keep_menu_open = true,
-                    callback = function()
-                        self:setChatGPTAPIKey()
-                    end,
-                },
-                {
-                    text = self.loc:t("menu_provider_select"), 
-                    keep_menu_open = true,
-                    callback = function()
-                        self:selectAIProvider()
-                    end,
-                },
-                {
-                    text = self.loc:t("menu_local_ai_settings"), 
-                    keep_menu_open = true,
-                    callback = nil, -- Submenu
-                    sub_item_table = {
-                        {
-                            text = self.loc:t("menu_local_ai_url"),
-                            keep_menu_open = true,
-                            callback = function()
-                                self:setLocalAIEndpoint()
-                            end,
-                        },
-                        {
-                            text = self.loc:t("menu_local_ai_key"),
-                            keep_menu_open = true,
-                            callback = function()
-                                self:setLocalAIKey()
-                            end,
-                        },
-                        {
-                            text = self.loc:t("menu_local_ai_model"),
-                            keep_menu_open = true,
-                            callback = function()
-                                self:setLocalAIModel()
-                            end,
-                        },
-                    }
-                },
-            }
-        },
-        {
-            text = self.loc:t("menu_clear_cache"),
-            keep_menu_open = true,
-            callback = function()
-                self:clearCache()
-            end,
-        },
-        {
-            text = self.loc:t("menu_xray_mode") .. " " .. (self.xray_mode_enabled and self.loc:t("xray_mode_active") or self.loc:t("xray_mode_inactive")),
-            keep_menu_open = true,
-            callback = function()
-                self:toggleXRayMode()
-            end,
-        },
-        {
-            text = self.loc:t("menu_cloud_sync") or "Cloud Sync",
-            keep_menu_open = true,
-            sub_item_table = {
-                {
-                    text = self.loc:t("menu_manage_server") or "Manage Server",
-                    keep_menu_open = true,
-                    callback = function(touchmenu_instance)
-                         self:manageSyncServer(touchmenu_instance)
-                    end,
-                },
-                {
-                   text = self.loc:t("menu_upload_xray") or "Upload X-Ray Data",
-                   enabled_func = function() return self.settings.sync_server ~= nil end,
-                   callback = function()
-                       self:uploadXRayData()
-                   end,
-                },
-                {
-                   text = self.loc:t("menu_download_xray") or "Download X-Ray Data",
-                   enabled_func = function() return self.settings.sync_server ~= nil end,
-                   callback = function()
-                       self:downloadXRayData()
-                   end,
-                },
-            }
-        },
-        {
-            text = self.loc:t("menu_about"),
-            keep_menu_open = true,
-            callback = function()
-                self:showAbout()
-            end,
-        },
-    }
+        })
+    end
+
+    -- Separator attached to last item
+    if #items > 0 then
+        items[#items].separator = true
+    end
+
+    table.insert(items, {
+        text = self.loc:t("menu_fetch_ai"),
+        keep_menu_open = true,
+        callback = function()
+            self:fetchFromAI()
+        end,
+    })
+
+    table.insert(items, {
+        text = self.loc:t("menu_ai_settings"),
+        keep_menu_open = true,
+        sub_item_table = {
+            {
+                text = self.loc:t("menu_gemini_key"), 
+                keep_menu_open = true,
+                callback = function()
+                    self:setGeminiAPIKey()
+                end,
+            },
+            {
+                text = self.loc:t("menu_gemini_model"), 
+                keep_menu_open = true,
+                callback = function()
+                    self:selectGeminiModel()
+                end,
+            },
+            {
+                text = self.loc:t("menu_chatgpt_key"), 
+                keep_menu_open = true,
+                callback = function()
+                    self:setChatGPTAPIKey()
+                end,
+            },
+            {
+                text = self.loc:t("menu_provider_select"), 
+                keep_menu_open = true,
+                callback = function()
+                    self:selectAIProvider()
+                end,
+            },
+            {
+                text = self.loc:t("menu_local_ai_settings"), 
+                keep_menu_open = true,
+                callback = nil, -- Submenu
+                sub_item_table = {
+                    {
+                        text = self.loc:t("menu_local_ai_url"),
+                        keep_menu_open = true,
+                        callback = function()
+                            self:setLocalAIEndpoint()
+                        end,
+                    },
+                    {
+                        text = self.loc:t("menu_local_ai_key"),
+                        keep_menu_open = true,
+                        callback = function()
+                            self:setLocalAIKey()
+                        end,
+                    },
+                    {
+                        text = self.loc:t("menu_local_ai_model"),
+                        keep_menu_open = true,
+                        callback = function()
+                            self:setLocalAIModel()
+                        end,
+                    },
+                }
+            },
+        }
+    })
+
+    table.insert(items, {
+        text = self.loc:t("menu_view_options") or "View Options",
+        keep_menu_open = true,
+        callback = function()
+            self:showViewOptions()
+        end,
+    })
+
+    table.insert(items, {
+        text = self.loc:t("menu_clear_cache"),
+        keep_menu_open = true,
+        callback = function()
+            self:clearCache()
+        end,
+    })
+
+    table.insert(items, {
+        text = self.loc:t("menu_xray_mode") .. " " .. (self.xray_mode_enabled and self.loc:t("xray_mode_active") or self.loc:t("xray_mode_inactive")),
+        keep_menu_open = true,
+        callback = function()
+            self:toggleXRayMode()
+        end,
+    })
+
+    table.insert(items, {
+        text = self.loc:t("menu_cloud_sync") or "Cloud Sync",
+        keep_menu_open = true,
+        sub_item_table = {
+            {
+                text = self.loc:t("menu_manage_server") or "Manage Server",
+                keep_menu_open = true,
+                callback = function(touchmenu_instance)
+                     self:manageSyncServer(touchmenu_instance)
+                end,
+            },
+            {
+               text = self.loc:t("menu_upload_xray") or "Upload X-Ray Data",
+               enabled_func = function() return self.settings.sync_server ~= nil end,
+               callback = function()
+                   self:uploadXRayData()
+               end,
+            },
+            {
+               text = self.loc:t("menu_download_xray") or "Download X-Ray Data",
+               enabled_func = function() return self.settings.sync_server ~= nil end,
+               callback = function()
+                   self:downloadXRayData()
+               end,
+            },
+        }
+    })
+
+
+
+    return items
 end
 
 function XRayPlugin:addToMainMenu(menu_items)
@@ -993,6 +1057,23 @@ function XRayPlugin:addToMainMenu(menu_items)
         return key
     end
     
+    -- Load visibility settings
+    local function load_bool_setting(key, default)
+        local val = G_reader_settings:readSetting(key)
+        if val == nil then return default end
+        return val
+    end
+
+    self.settings.show_characters = load_bool_setting("xray_show_characters", true)
+    self.settings.show_chapter_characters = load_bool_setting("xray_show_chapter_characters", true)
+    self.settings.show_character_notes = load_bool_setting("xray_show_character_notes", true)
+    self.settings.show_timeline = load_bool_setting("xray_show_timeline", true)
+    self.settings.show_historical_figures = load_bool_setting("xray_show_historical_figures", true)
+    self.settings.show_locations = load_bool_setting("xray_show_locations", true)
+    self.settings.show_themes = load_bool_setting("xray_show_themes", true)
+    self.settings.show_summary = load_bool_setting("xray_show_summary", true)
+    self.settings.show_author_info = load_bool_setting("xray_show_author_info", true)
+
     -- Use sub_item_table_func for lazy evaluation (sync on open) and native styling
     menu_items.xray = {
         text_func = function()
@@ -1282,6 +1363,119 @@ function XRayPlugin:manageSyncServer(touchmenu_instance)
         }
     }
     UIManager:show(dialogue)
+end
+
+
+
+function XRayPlugin:showViewOptions()
+    local TouchMenu = require("ui/widget/touchmenu")
+    local items = {
+        icon = "settings",
+        text = self.loc:t("menu_view_options") or "View Settings",
+        {
+            text = self.loc:t("enable_full_cache_spoilers") or "Enable Full Cache (Spoilers)",
+            checked_func = function() return self.settings.show_spoilers end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_spoilers = not self.settings.show_spoilers
+                G_reader_settings:saveSetting("xray_show_spoilers", self.settings.show_spoilers)
+                -- Force sync immediately so user sees effect
+                self:syncCacheFromPartials()
+            end,
+            separator = true,
+        },
+        {
+            text = self.loc:t("menu_characters") or "Characters",
+            checked_func = function() return self.settings.show_characters end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_characters = not self.settings.show_characters
+                G_reader_settings:saveSetting("xray_show_characters", self.settings.show_characters)
+            end,
+        },
+        {
+            text = self.loc:t("menu_chapter_characters") or "Chapter Characters",
+            checked_func = function() return self.settings.show_chapter_characters end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_chapter_characters = not self.settings.show_chapter_characters
+                G_reader_settings:saveSetting("xray_show_chapter_characters", self.settings.show_chapter_characters)
+            end,
+        },
+        {
+            text = self.loc:t("menu_character_notes") or "Character Notes",
+            checked_func = function() return self.settings.show_character_notes end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_character_notes = not self.settings.show_character_notes
+                G_reader_settings:saveSetting("xray_show_character_notes", self.settings.show_character_notes)
+            end,
+        },
+        {
+            text = self.loc:t("menu_timeline") or "Timeline",
+            checked_func = function() return self.settings.show_timeline end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_timeline = not self.settings.show_timeline
+                G_reader_settings:saveSetting("xray_show_timeline", self.settings.show_timeline)
+            end,
+        },
+        {
+            text = self.loc:t("menu_historical_figures") or "Historical Figures",
+            checked_func = function() return self.settings.show_historical_figures end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_historical_figures = not self.settings.show_historical_figures
+                G_reader_settings:saveSetting("xray_show_historical_figures", self.settings.show_historical_figures)
+            end,
+        },
+        {
+            text = self.loc:t("menu_locations") or "Locations",
+            checked_func = function() return self.settings.show_locations end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_locations = not self.settings.show_locations
+                G_reader_settings:saveSetting("xray_show_locations", self.settings.show_locations)
+            end,
+        },
+        {
+            text = self.loc:t("menu_themes") or "Themes",
+            checked_func = function() return self.settings.show_themes end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_themes = not self.settings.show_themes
+                G_reader_settings:saveSetting("xray_show_themes", self.settings.show_themes)
+            end,
+        },
+        {
+            text = self.loc:t("menu_summary") or "Summary",
+            checked_func = function() return self.settings.show_summary end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_summary = not self.settings.show_summary
+                G_reader_settings:saveSetting("xray_show_summary", self.settings.show_summary)
+            end,
+        },
+        {
+            text = self.loc:t("menu_author_info") or "Author Info",
+            checked_func = function() return self.settings.show_author_info end,
+            keep_menu_open = true,
+            separator = true,
+            callback = function()
+                self.settings.show_author_info = not self.settings.show_author_info
+                G_reader_settings:saveSetting("xray_show_author_info", self.settings.show_author_info)
+            end,
+        },
+
+    }
+
+    local Screen = require("device").screen
+    local menu = TouchMenu:new{
+        width = Screen:getWidth(),
+        height = Screen:getHeight(),
+        tab_item_table = { items },
+    }
+    UIManager:show(menu)
 end
 
 function XRayPlugin:uploadXRayData()
@@ -3015,6 +3209,12 @@ function XRayPlugin:syncCacheFromPartials()
     -- 1. Get current reading progress
     local current_page, total_pages, progress = self:getReadingProgress()
     if not progress then progress = 100 end -- Fallback
+
+    if self.settings.show_spoilers then
+        logger.info("XRayPlugin: Spoiler mode enabled, forcing progress to 100%")
+        progress = 100
+    end
+
     
     local book_path = self:getBookPath()
     if not book_path then return end

@@ -233,7 +233,19 @@ function Localization:t(key, ...)
             provider_select_title = "选择 AI 提供商",
             gemini_selected = "已启用 Google Gemini",
             chatgpt_selected = "已启用 ChatGPT",
-            set_key_first = "请先设置 API 密钥！"
+            set_key_first = "请先设置 API 密钥！",
+            
+            -- View Options
+            menu_view_options = "显示选项",
+            menu_characters = "人物",
+            menu_chapter_characters = "本章人物",
+            menu_character_notes = "人物笔记",
+            menu_timeline = "时间线",
+            menu_historical_figures = "历史人物",
+            menu_locations = "地点",
+            menu_themes = "主题",
+            menu_summary = "总结",
+            menu_author_info = "作者信息"
         }
         translation = fallbacks[key] or key
     end

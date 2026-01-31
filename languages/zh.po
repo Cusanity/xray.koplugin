@@ -65,6 +65,9 @@ msgstr "X-Ray模式："
 msgid "menu_language"
 msgstr "语言"
 
+msgid "menu_view_options"
+msgstr "显示选项"
+
 msgid "menu_about"
 msgstr "关于"
 
