@@ -59,8 +59,6 @@ msgstr "AI设置"
 msgid "menu_clear_cache"
 msgstr "清除缓存"
 
-msgid "menu_xray_mode"
-msgstr "X-Ray模式："
 
 msgid "menu_language"
 msgstr "语言"
@@ -93,7 +91,7 @@ msgid "uploading"
 msgstr "正在上传..."
 
 msgid "download_warn"
-msgstr "这将用服务器上的文件覆盖本地 X-Ray 数据。\n确定继续吗？"
+msgstr "此操作将从云端下载 X-Ray 数据。\n\n注意：这将覆盖现有的本地 X-Ray 数据。\n\n确定继续吗？"
 
 msgid "download"
 msgstr "下载"
@@ -111,13 +109,7 @@ msgid "upload_complete"
 msgstr "上传完成\n成功: %d, 失败: %d"
 
 msgid "download_complete"
-msgstr "下载完成\n成功: %d, 失败: %d\n数据已重新加载。"
-
-msgid "xray_mode_enabled"
-msgstr "X-Ray人物识别已启用"
-
-msgid "xray_mode_disabled"
-msgstr "X-Ray人物识别已关闭"
+msgstr "下载完成\n成功: %d, 失败: %d, 已跳过: %d\n数据已重新加载。"
 
 msgid "mention_count"
 msgstr "提及次数: %d"
@@ -870,3 +862,6 @@ msgstr "X-Ray进度"
 
 msgid "reading_progress"
 msgstr "阅读进度"
+
+msgid "menu_full_analysis"
+msgstr "全文模式"

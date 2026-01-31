@@ -245,7 +245,8 @@ function Localization:t(key, ...)
             menu_locations = "地点",
             menu_themes = "主题",
             menu_summary = "总结",
-            menu_author_info = "作者信息"
+            menu_author_info = "作者信息",
+            menu_full_analysis = "完整分析"
         }
         translation = fallbacks[key] or key
     end

@@ -268,7 +268,7 @@ function Sync:upload(cache_manager, server, book_path, callback)
     if callback then callback(success_count, fail_count, errors) end
 end
 
-function Sync:download(cache_manager, server, book_path, callback)
+function Sync:download(cache_manager, server, book_path, callback, force)
     if not server or not book_path then return end
 
     local api = self:getApi(server)
@@ -308,30 +308,6 @@ function Sync:download(cache_manager, server, book_path, callback)
             return false
         end
     end
-
-    -- 1. Download xray_cache.lua
-    local remote_cache_path = self:joinPath(remote_book_dir, "xray_cache.lua")
-    local full_url_cache = remote_cache_path
-    if server.type == "webdav" then
-         full_url_cache = api:getJoinedPath(server.address, remote_cache_path)
-    end
-    
-    -- Try download directly
-    local code, _ 
-    if server.type == "webdav" then
-        code, _ = api:downloadFile(full_url_cache, server.username, server.password, paths.cache_file)
-    end
-    
-    if type(code) == "number" and code == 200 then
-        success_count = success_count + 1
-        logger.info("Sync: Downloaded xray_cache.lua")
-    elseif code == 404 then
-        logger.info("Sync: Remote xray_cache.lua not found")
-    else
-        fail_count = fail_count + 1
-        logger.warn("Sync: Failed to download xray_cache.lua", code)
-        table.insert(errors, "xray_cache.lua (" .. tostring(code) .. ") <- " .. full_url_cache)
-    end
     
     -- 2. Download Analysis Files
     local items = nil
@@ -344,28 +320,60 @@ function Sync:download(cache_manager, server, book_path, callback)
     lfs.mkdir(paths.analysis_dir)
     
     if items then
-        logger.info("Sync: Processing", #items, "items from remote analysis folder")
-        for i, item in ipairs(items) do
-            local filename = item.display_name
-            if not filename and item.url then
-                filename = ffiutil.basename(item.url)
-            end
-            
-            -- Skip directories
-            if item.type == "folder" or item.type == "directory" then
-                goto continue
-            end
+        -- Check if we have any local analysis files to avoid mixing
+        local has_local_files = false
+        if lfs.attributes(paths.analysis_dir) then
+             for file in lfs.dir(paths.analysis_dir) do
+                 if file:match("^%d+%%%.json$") then
+                     has_local_files = true
+                     break
+                 end
+             end
+        end
 
-            if filename and filename:match("^%d+%%%.json$") then
-                 local local_dest = paths.analysis_dir .. "/" .. filename
-                 download_file(item, local_dest)
+        if force then
+            if lfs.attributes(paths.analysis_dir) then
+                logger.info("Sync: Force download requested. Deleting local analysis files.")
+                for file in lfs.dir(paths.analysis_dir) do
+                    if file:match("^%d+%%%.json$") then
+                        os.remove(paths.analysis_dir .. "/" .. file)
+                    end
+                end
+                has_local_files = false
             end
-            
-            ::continue::
+        end
+
+        if has_local_files then
+             logger.info("Sync: Local analysis files found. Skipping download of " .. #items .. " items from cloud to prevent mixing.")
+             for _, item in ipairs(items) do
+                 -- Log skipped items for clarity if needed, or just count them
+                 skipped_count = skipped_count + 1
+             end
+        else
+            logger.info("Sync: Processing", #items, "items from remote analysis folder")
+            for i, item in ipairs(items) do
+                local filename = item.display_name
+                if not filename and item.url then
+                    filename = ffiutil.basename(item.url)
+                end
+                
+                -- Skip directories
+                if item.type == "folder" or item.type == "directory" then
+                    goto continue
+                end
+    
+                if filename and filename:match("^%d+%%%.json$") then
+                     local local_dest = paths.analysis_dir .. "/" .. filename
+                     download_file(item, local_dest)
+                end
+                
+                ::continue::
+            end
         end
     end
     
-    if callback then callback(success_count, fail_count, errors) end
+    
+    if callback then callback(success_count, fail_count, errors, skipped_count) end
 end
 
 return Sync

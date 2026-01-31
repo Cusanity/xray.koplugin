@@ -14,6 +14,9 @@ local Sync = require("sync")
 local Dispatcher = require("dispatcher")
 local Event = require("ui/event")
 
+-- prioritize xray in the tools menu
+table.insert(require("ui/elements/reader_menu_order").tools, 1, "xray")
+
 
 local XRayPlugin = WidgetContainer:new{
     name = "xray",
@@ -351,10 +354,6 @@ function XRayPlugin:onReaderReady()
             text = "X-Ray",
             show_in_highlight_dialog_func = function()
                 self:autoLoadCache()
-                -- Only show if X-Ray mode is enabled and we have a match
-                if not self.xray_mode_enabled then
-                    return false
-                end
                 
                 if not highlight_instance.selected_text or not highlight_instance.selected_text.text then
                     return false
@@ -451,55 +450,20 @@ function XRayPlugin:autoLoadCache()
         logger.info("XRayPlugin: Auto-loaded from cache -", #self.characters, "characters,", 
                     cache_age, "days old")
         
-        if #self.characters > 0 then
-            self.xray_mode_enabled = true
-            logger.info("XRayPlugin: X-Ray mode auto-enabled")
-        end
     else
         logger.info("XRayPlugin: No cache found for auto-load")
         return nil
     end
 end
 
--- Toggle X-Ray mode (character name tap detection)
-function XRayPlugin:toggleXRayMode()
-    self.xray_mode_enabled = not self.xray_mode_enabled
-    
-    local UIManager = require("ui/uimanager")
-    local InfoMessage = require("ui/widget/infomessage")
-    
-    if self.xray_mode_enabled then
-        logger.info("XRayPlugin: X-Ray mode enabled")
-        UIManager:show(InfoMessage:new{
-            text = self.loc:t("xray_mode_enabled"),
-            timeout = 2
-        })
-    else
-        logger.info("XRayPlugin: X-Ray mode disabled")
-        UIManager:show(InfoMessage:new{
-            text = self.loc:t("xray_mode_disabled"),
-            timeout = 2
-        })
-    end
-    
-    -- Force menu refresh to update toggle display
-    self.ui.menu:refreshMenuTitleBar()
-end
 
 -- Handle long-press/text selection for X-Ray entity detection
 function XRayPlugin:onHoldWord(word, word_box, ges_pos)
     logger.info("=== XRayPlugin: onHoldWord CALLED ===")
     logger.info("XRayPlugin: word=", word)
-    logger.info("XRayPlugin: xray_mode_enabled=", self.xray_mode_enabled)
     logger.info("XRayPlugin: characters count=", self.characters and #self.characters or "nil")
     logger.info("XRayPlugin: locations count=", self.locations and #self.locations or "nil")
     logger.info("XRayPlugin: themes count=", self.themes and #self.themes or "nil")
-    
-    -- Only process if X-Ray mode is enabled and we have data
-    if not self.xray_mode_enabled then
-        logger.info("XRayPlugin: onHoldWord - mode DISABLED, propagating")
-        return false  -- Propagate to other handlers (dictionary, highlight, etc.)
-    end
     
     if not word or word == "" then
         logger.info("XRayPlugin: onHoldWord - NO WORD, propagating")
@@ -979,18 +943,14 @@ function XRayPlugin:getXRaySubMenuItems()
     })
 
     table.insert(items, {
-        text = self.loc:t("menu_clear_cache"),
+        text = self.loc:t("menu_full_analysis") or "Full Analysis",
+        checked_func = function() return self.settings.show_spoilers end,
         keep_menu_open = true,
         callback = function()
-            self:clearCache()
-        end,
-    })
-
-    table.insert(items, {
-        text = self.loc:t("menu_xray_mode") .. " " .. (self.xray_mode_enabled and self.loc:t("xray_mode_active") or self.loc:t("xray_mode_inactive")),
-        keep_menu_open = true,
-        callback = function()
-            self:toggleXRayMode()
+            self.settings.show_spoilers = not self.settings.show_spoilers
+            G_reader_settings:saveSetting("xray_show_spoilers", self.settings.show_spoilers)
+            -- Force sync immediately so user sees effect
+            self:syncCacheFromPartials()
         end,
     })
 
@@ -1016,8 +976,15 @@ function XRayPlugin:getXRaySubMenuItems()
                text = self.loc:t("menu_download_xray") or "Download X-Ray Data",
                enabled_func = function() return self.settings.sync_server ~= nil end,
                callback = function()
-                   self:downloadXRayData()
+                   self:downloadXRayData(true)
                end,
+            },
+            {
+                text = self.loc:t("menu_clear_cache"),
+                keep_menu_open = true,
+                callback = function()
+                    self:clearCache()
+                end,
             },
         }
     })
@@ -1105,7 +1072,7 @@ function XRayPlugin:registerActions()
         reader = true,
     })
     Dispatcher:registerAction("xray_download_sync", {
-        category = "none",
+        category = "arg",
         event = "XRayDownloadSync",
         title = self.loc:t("menu_download_xray") or "Download X-Ray Data",
         reader = true,
@@ -1372,20 +1339,8 @@ end
 function XRayPlugin:showViewOptions()
     local TouchMenu = require("ui/widget/touchmenu")
     local items = {
-        icon = "settings",
+        icon = "appbar.settings",
         text = self.loc:t("menu_view_options") or "View Settings",
-        {
-            text = self.loc:t("enable_full_cache_spoilers") or "Enable Full Cache (Spoilers)",
-            checked_func = function() return self.settings.show_spoilers end,
-            keep_menu_open = true,
-            callback = function()
-                self.settings.show_spoilers = not self.settings.show_spoilers
-                G_reader_settings:saveSetting("xray_show_spoilers", self.settings.show_spoilers)
-                -- Force sync immediately so user sees effect
-                self:syncCacheFromPartials()
-            end,
-            separator = true,
-        },
         {
             text = self.loc:t("menu_characters") or "Characters",
             checked_func = function() return self.settings.show_characters end,
@@ -1522,47 +1477,69 @@ function XRayPlugin:uploadXRayData()
     end
 end
 
-function XRayPlugin:downloadXRayData()
+function XRayPlugin:downloadXRayData(force_download)
+    -- force_download: if true, it means triggered from menu, so we want to potentially overwrite/clear
+    -- if nil/false, it means triggered by gesture/auto, so we want to be safe (skip if exists)
+    
     if not self.settings.sync_server then return end
     
     local InfoMessage = require("ui/widget/infomessage")
-    local msg = InfoMessage:new{ text = self.loc:t("downloading") or "Downloading...", timeout = nil }
-    UIManager:show(msg)
     
-     -- Ensure Cache Manager is loaded
-    self:autoLoadCache()
-    
-    if not self.sync then
-        self.sync = Sync:new()
-    end
-    
-    local book_path = self:getBookPath()
-    if book_path then
-        self.sync:download(self.cache_manager, self.settings.sync_server, book_path, function(success, fail, errors)
+    local function do_download(force)
+        local msg = InfoMessage:new{ text = self.loc:t("downloading") or "Downloading...", timeout = nil }
+        UIManager:show(msg)
+        
+        -- Ensure Cache Manager is loaded
+        self:autoLoadCache()
+        
+        if not self.sync then
+            self.sync = Sync:new()
+        end
+        
+        local book_path = self:getBookPath()
+        if book_path then
+            self.sync:download(self.cache_manager, self.settings.sync_server, book_path, function(success, fail, errors, skipped)
+                UIManager:close(msg)
+                -- Reload cache
+                self:autoLoadCache()
+                
+                skipped = skipped or 0
+                local result_msg = string.format(self.loc:t("download_complete"), success, fail, skipped)
+                
+                if errors and #errors > 0 then
+                    result_msg = result_msg .. "\n\nError details:\n"
+                    -- Limit to first 3 errors to ensure it fits on screen
+                    for i = 1, math.min(#errors, 3) do
+                        result_msg = result_msg .. errors[i] .. "\n"
+                    end
+                    if #errors > 3 then
+                        result_msg = result_msg .. "...and " .. (#errors - 3) .. " more."
+                    end
+                end
+                
+                UIManager:show(InfoMessage:new{
+                    text = result_msg,
+                    timeout = 10 -- Longer timeout to read errors
+                })
+            end, force) 
+        else
             UIManager:close(msg)
-            -- Reload cache
-            self:autoLoadCache()
-            
-            local result_msg = string.format(self.loc:t("download_complete"), success, fail)
-            
-            if errors and #errors > 0 then
-                result_msg = result_msg .. "\n\nError details:\n"
-                -- Limit to first 3 errors to ensure it fits on screen
-                for i = 1, math.min(#errors, 3) do
-                    result_msg = result_msg .. errors[i] .. "\n"
-                end
-                if #errors > 3 then
-                    result_msg = result_msg .. "...and " .. (#errors - 3) .. " more."
-                end
+        end
+    end
+    if force_download then
+        local UIManager = require("ui/uimanager")
+        local ConfirmBox = require("ui/widget/confirmbox")
+        
+        UIManager:show(ConfirmBox:new{
+            text = self.loc:t("download_warn"),
+            ok_text = self.loc:t("download_button") or "Download",
+            cancel_text = _("Cancel"),
+            ok_callback = function()
+                do_download(true) -- Force enabled
             end
-            
-            UIManager:show(InfoMessage:new{
-                text = result_msg,
-                timeout = 10 -- Longer timeout to read errors
-            })
-        end)
+        })
     else
-        UIManager:close(msg)
+        do_download(false) -- Force disabled (safe mode)
     end
 end
 
@@ -3281,7 +3258,11 @@ function XRayPlugin:onXRayUploadSync()
     return true
 end
 
-function XRayPlugin:onXRayDownloadSync()
+function XRayPlugin:onXRayDownloadSync(arg)
+    local is_gesture = type(arg) == "table" and arg.ges
+    if is_gesture then
+        logger.info("XRayPlugin: Download triggered by gesture:", arg.ges)
+    end
     self:downloadXRayData()
     return true
 end
