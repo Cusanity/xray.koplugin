@@ -770,7 +770,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_characters then
         table.insert(items, {
             text = self.loc:t("menu_characters") .. (counts.characters > 0 and " (" .. counts.characters .. ")" or ""),
-            keep_menu_open = true,
             callback = function()
                 self:showCharacters()
             end,
@@ -780,7 +779,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_chapter_characters then
         table.insert(items, {
             text = self.loc:t("menu_chapter_characters"),
-            keep_menu_open = true,
             callback = function()
                 self:showChapterCharacters()
             end,
@@ -790,7 +788,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_character_notes then
         table.insert(items, {
             text = self.loc:t("menu_character_notes"),
-            keep_menu_open = true,
             callback = function()
                 self:showCharacterNotes()
             end,
@@ -799,8 +796,7 @@ function XRayPlugin:getXRaySubMenuItems()
 
     if self.settings.show_timeline then
         table.insert(items, {
-            text = self.loc:t("menu_timeline") .. (counts.timeline > 0 and " (" .. counts.timeline .. " " .. self.loc:t("events") .. ")" or ""),
-            keep_menu_open = true,
+            text = self.loc:t("menu_timeline") .. (counts.timeline > 0 and " (" .. counts.timeline .. ")" or ""),
             callback = function()
                 self:showTimeline()
             end,
@@ -810,7 +806,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_historical_figures then
         table.insert(items, {
             text = self.loc:t("menu_historical_figures") .. (counts.historical_figures > 0 and " (" .. counts.historical_figures .. ")" or ""),
-            keep_menu_open = true,
             callback = function()
                 self:showHistoricalFigures()
             end,
@@ -820,7 +815,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_locations then
         table.insert(items, {
             text = self.loc:t("menu_locations") .. (counts.locations > 0 and " (" .. counts.locations .. ")" or ""),
-            keep_menu_open = true,
             callback = function()
                 self:showLocations()
             end,
@@ -830,7 +824,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_author_info then
         table.insert(items, {
             text = self.loc:t("menu_author_info"),
-            keep_menu_open = true,
             callback = function()
                 self:showAuthorInfo()
             end,
@@ -840,7 +833,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_summary then
         table.insert(items, {
             text = self.loc:t("menu_summary"),
-            keep_menu_open = true,
             callback = function()
                 self:showSummary()
             end,
@@ -850,7 +842,6 @@ function XRayPlugin:getXRaySubMenuItems()
     if self.settings.show_themes then
         table.insert(items, {
             text = self.loc:t("menu_themes") .. (counts.themes > 0 and " (" .. counts.themes .. ")" or ""),
-            keep_menu_open = true,
             callback = function()
                 self:showThemes()
             end,
@@ -1115,6 +1106,42 @@ function XRayPlugin:showLanguageSelection()
     UIManager:show(self.ldlg)
 end
 
+function XRayPlugin:closeAllMenus()
+    local function close_widget(w)
+        if w then UIManager:close(w) end
+    end
+    
+    close_widget(self.characters_menu)
+    self.characters_menu = nil
+    
+    close_widget(self.chapter_characters_menu)
+    self.chapter_characters_menu = nil
+    
+    close_widget(self.timeline_menu)
+    self.timeline_menu = nil
+    
+    close_widget(self.historical_menu)
+    self.historical_menu = nil
+    
+    close_widget(self.location_menu)
+    self.location_menu = nil
+    
+    close_widget(self.theme_menu)
+    self.theme_menu = nil
+    
+    close_widget(self.notes_menu)
+    self.notes_menu = nil
+
+    close_widget(self.events_menu)
+    self.events_menu = nil
+    
+    if self.native_dialog then
+        UIManager:close(self.native_dialog)
+        self.native_dialog = nil
+        UIManager:setDirty(nil, "full")
+    end
+end
+
 function XRayPlugin:showCharacters()
     if not self.characters or #self.characters == 0 then
         UIManager:show(InfoMessage:new{
@@ -1173,7 +1200,7 @@ function XRayPlugin:showCharacters()
         return
     end
     
-    local character_menu = Menu:new{
+    self.characters_menu = Menu:new{
         title = (self.loc:t("menu_characters") or "Characters") .. " (" .. #self.characters .. ")",
         item_table = items,
         -- is_borderless = true,
@@ -1183,7 +1210,7 @@ function XRayPlugin:showCharacters()
         -- height = Screen:getHeight(),
     }
     
-    UIManager:show(character_menu)
+    UIManager:show(self.characters_menu)
 end
 
 -- showCharacterDetails consolidated to implementation at line 2022
@@ -2001,7 +2028,7 @@ function XRayPlugin:showLocations()
         })
     end
     
-    local location_menu = Menu:new{
+    self.location_menu = Menu:new{
         title = self.loc:t("menu_locations") .. " (" .. #self.locations .. ")",
         item_table = items,
         -- is_borderless = true,
@@ -2011,7 +2038,7 @@ function XRayPlugin:showLocations()
         -- height = Screen:getHeight(),
     }
     
-    UIManager:show(location_menu)
+    UIManager:show(self.location_menu)
 end
 
 function XRayPlugin:showLocationDetails(location)
@@ -2202,7 +2229,7 @@ end
 function XRayPlugin:showCharacterEventsList(character, events)
     if not events or #events == 0 then return end
     
-    local menu -- Declare upvalue for closure
+    -- self.events_menu -- We track this in self now
     local items = {}
     
     for i, event in ipairs(events) do
@@ -2212,14 +2239,14 @@ function XRayPlugin:showCharacterEventsList(character, events)
         table.insert(items, {
             text = text,
             callback = function()
-                 if menu then UIManager:close(menu) end
+                 self:closeAllMenus()
                  self.ui.link:addCurrentLocationToStack()
                  self.ui:handleEvent(Event:new("GotoPercent", percent))
             end,
         })
     end
     
-    menu = Menu:new{
+    self.events_menu = Menu:new{
         title = (character.name or "Character") .. " - " .. (self.loc:t("events") or "Events"),
         item_table = items,
         is_popout = false,
@@ -2228,7 +2255,7 @@ function XRayPlugin:showCharacterEventsList(character, events)
         height = Screen:getHeight(),
     }
     
-    UIManager:show(menu)
+    UIManager:show(self.events_menu)
 end
 
 function XRayPlugin:setGeminiAPIKey()
@@ -2627,14 +2654,14 @@ function XRayPlugin:showThemes()
         })
     end
     
-    local theme_menu = Menu:new{
+    self.theme_menu = Menu:new{
         title = self.loc:t("menu_themes") .. " (" .. #self.themes .. ")",
         item_table = items,
         is_popout = false,
         title_bar_fm_style = true,
     }
     
-    UIManager:show(theme_menu)
+    UIManager:show(self.theme_menu)
 end
 
 function XRayPlugin:showThemeDetails(theme)
@@ -2669,51 +2696,54 @@ function XRayPlugin:showTimeline()
         return
     end
     
+    local timeline_menu
     local items = {}
+    
     for i, event in ipairs(self.timeline) do
         local text = event.event or "Event"
         if event.chapter then
              text = text .. " (" .. self.loc:t("chapter") .. " " .. event.chapter .. ")"
         end
         
+        -- Add percent to list item text for clarity
+        if event.percent then
+            text = text .. string.format(" (%.1f%%)", event.percent)
+        end
+        
         table.insert(items, {
             text = text,
             callback = function()
-                local title = string.format(self.loc:t("timeline_event"), i)
-                local description = event.event or ""
-                local metadata = {}
-                
-                if event.chapter then
-                    table.insert(metadata, self.loc:t("chapter") .. ": " .. event.chapter)
-                end
-                
-                if event.importance then
-                    table.insert(metadata, (self.loc:t("importance") or "Importance") .. ": " .. event.importance)
-                end
-                
-                if event.characters and #event.characters > 0 then
-                    local chars_str = table.concat(event.characters, ", ")
-                    table.insert(metadata, self.loc:t("characters_involved") .. ": " .. chars_str)
-                end
-                
-                local extra_buttons = {}
                 if event.percent then
-                    table.insert(extra_buttons, {
-                        text = (self.loc:t("go_to_location") or "Go to Location") .. string.format(" (%.1f%%)", event.percent),
-                        callback = function()
-                            self.ui.link:addCurrentLocationToStack()
-                            self.ui:handleEvent(Event:new("GotoPercent", event.percent))
-                        end
-                    })
+                    self:closeAllMenus()
+                    self.ui.link:addCurrentLocationToStack()
+                    self.ui:handleEvent(Event:new("GotoPercent", event.percent))
+                else
+                    -- Fallback to details if no percent available
+                    local title = string.format(self.loc:t("timeline_event"), i)
+                    local description = event.event or ""
+                    local metadata = {}
+                    
+                    if event.chapter then
+                        table.insert(metadata, self.loc:t("chapter") .. ": " .. event.chapter)
+                    end
+                    
+                    if event.importance then
+                        table.insert(metadata, (self.loc:t("importance") or "Importance") .. ": " .. event.importance)
+                    end
+                    
+                    if event.characters and #event.characters > 0 then
+                        local chars_str = table.concat(event.characters, ", ")
+                        table.insert(metadata, self.loc:t("characters_involved") .. ": " .. chars_str)
+                    end
+                    
+                    self:showNativeDetails(title, description, metadata)
                 end
-                
-                self:showNativeDetails(title, description, metadata, extra_buttons)
             end,
         })
     end
     
-    local timeline_menu = Menu:new{
-        title = self.loc:t("menu_timeline") .. " (" .. #self.timeline .. " " .. self.loc:t("events") .. ")",
+    self.timeline_menu = Menu:new{
+        title = self.loc:t("menu_timeline") .. " (" .. #self.timeline .. ")",
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2722,7 +2752,7 @@ function XRayPlugin:showTimeline()
         -- height = Screen:getHeight(),
     }
     
-    UIManager:show(timeline_menu)
+    UIManager:show(self.timeline_menu)
 end
 
 function XRayPlugin:showHistoricalFigures()
@@ -2749,7 +2779,7 @@ function XRayPlugin:showHistoricalFigures()
         })
     end
     
-    local figures_menu = Menu:new{
+    self.historical_menu = Menu:new{
         title = self.loc:t("menu_historical_figures") .. " (" .. #self.historical_figures .. ")",
         item_table = items,
         -- is_borderless = true,
@@ -2759,7 +2789,7 @@ function XRayPlugin:showHistoricalFigures()
         -- height = Screen:getHeight(),
     }
     
-    UIManager:show(figures_menu)
+    UIManager:show(self.historical_menu)
 end
 
 function XRayPlugin:showHistoricalFigureDetails(figure)
@@ -2855,7 +2885,7 @@ function XRayPlugin:showChapterCharacters()
         })
     end
     
-    local menu = Menu:new{
+    self.chapter_characters_menu = Menu:new{
         title = string.format("%s\n%d %s", 
                              chapter_title or self.loc:t("this_chapter"), 
                              #found_chars,
@@ -2868,7 +2898,7 @@ function XRayPlugin:showChapterCharacters()
         -- height = Screen:getHeight(),
     }
     
-    UIManager:show(menu)
+    UIManager:show(self.chapter_characters_menu)
     
     logger.info("XRayPlugin: Showed chapter characters -", #found_chars, "found")
 end
@@ -2935,7 +2965,7 @@ function XRayPlugin:showCharacterNotes()
         end
     end
     
-    local menu = Menu:new{
+    self.notes_menu = Menu:new{
         title = string.format(self.loc:t("character_notes_title"), notes_count),
         item_table = items,
         is_borderless = true,
@@ -2945,7 +2975,7 @@ function XRayPlugin:showCharacterNotes()
         height = Screen:getHeight(),
     }
     
-    UIManager:show(menu)
+    UIManager:show(self.notes_menu)
 end
 
 function XRayPlugin:showCharacterWithNote(char, note)

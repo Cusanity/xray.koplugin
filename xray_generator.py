@@ -404,48 +404,70 @@ def call_ai_with_retry(
 ) -> Any:
     """Call AI with retry logic for timeouts and API errors."""
 
-    if _selected_api == "cusanity":
-        # Extract prompts
-        system_prompt = next(
-            (m["content"] for m in messages if m["role"] == "system"), ""
-        )
-        user_prompt = next((m["content"] for m in messages if m["role"] == "user"), "")
-
+    # Infinite retry loop for both API errors and JSON parsing errors
+    attempt = 0
+    while True:
+        attempt += 1
         try:
-            import cusanity
+            if _selected_api == "cusanity":
+                # Extract prompts
+                system_prompt = next(
+                    (m["content"] for m in messages if m["role"] == "system"), ""
+                )
+                user_prompt = next(
+                    (m["content"] for m in messages if m["role"] == "user"), ""
+                )
 
-            # Using private _gemini_completion as requested
-            content = cusanity.ai_completion(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                provider=cusanity.Provider.GEMINI,  # Use public wrapper which calls _gemini_completion
-                model=model,
-                temperature=temperature,
-                top_p=TOP_P,
-                json_mode=True,
-                google_search=False,
-            )
-            return MockResponse(content)
-        except Exception as e:
-            print(f"    [Cusanity Error] {e}")
-            # Let existing retry logic handle or exit?
-            # Cusanity wrapper handles retries internally for models, but here we might want to catch specific errors.
-            # For now we re-raise to let the loop (if any) or user handle it.
-            # But since we return immediately, we rely on cusanity's internal robustness.
-            raise e
+                import cusanity
 
-    current_delay = delay
-    for attempt in range(retries):
-        try:
-            response = client.chat.completions.create(
-                model=model,
-                messages=messages,
-                temperature=temperature,
-                response_format={"type": "json_object"},
-                max_tokens=max_tokens,
-                timeout=AI_TIMEOUT_SECONDS,
-            )
-            return response
+                # Using private _gemini_completion via public wrapper
+                content = cusanity.ai_completion(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    provider=cusanity.Provider.GEMINI,
+                    model=model,
+                    temperature=temperature,
+                    top_p=TOP_P,
+                    json_mode=True,
+                    google_search=False,
+                )
+
+                # Check JSON validity to force retry on bad output
+                try:
+                    text_to_check = (
+                        content.replace("```json", "").replace("```", "").strip()
+                    )
+                    json.loads(text_to_check)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON from Cusanity: {content[:100]}...")
+
+                return MockResponse(content)
+
+            else:
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                    max_tokens=max_tokens,
+                    timeout=AI_TIMEOUT_SECONDS,
+                )
+
+                # Check content and JSON validity to force retry on bad output
+                content = response.choices[0].message.content
+                if not content:
+                    raise ValueError("Response content is None")
+
+                try:
+                    text_to_check = (
+                        content.replace("```json", "").replace("```", "").strip()
+                    )
+                    json.loads(text_to_check)
+                except json.JSONDecodeError:
+                    raise ValueError(f"Invalid JSON from OpenAI: {content[:100]}...")
+
+                return response
+
         except Exception as e:
             # Attempt to extract full response body from OpenAI/API error
             full_error = str(e)
@@ -467,14 +489,10 @@ def call_ai_with_retry(
                 # Use os._exit to immediately kill all threads and the process
                 os._exit(1)
 
-            if attempt == retries - 1:
-                print(f"    [AI Error] Final attempt failed on {model}: {full_error}")
-                os._exit(1)
             print(
-                f"    [AI Error] Attempt {attempt + 1}/{retries} failed on {model}: {e}. Retrying in {current_delay}s..."
+                f"    [AI Error] Attempt {attempt} failed on {model}: {e}.\n    Waiting 15s before retry..."
             )
-            time.sleep(current_delay)
-            current_delay *= 2
+            time.sleep(15)
 
 
 def consolidate_description_with_ai(
@@ -627,12 +645,8 @@ def cleanup_data(data: dict[str, Any], current_pct: int) -> dict[str, Any]:
         data["themes"] = unique_themes[:8]
 
     # Timeline
-    for event in data.get("timeline", []):
-        event.pop("importance", None)
-        event.pop("book_position_pct", None)
-
-    for i, event in enumerate(data.get("timeline", [])):
-        event["sequence"] = i + 1
+    # Rebuilt from character events in to_output_json
+    pass
 
     for event in data.get("pending_events", []):
         event.pop("importance", None)
@@ -764,11 +778,9 @@ class MasterData:
                 self.themes.add(theme)
 
     def _merge_events(self, events: list[Any]) -> None:
-        for e in events:
-            if isinstance(e, str) and e.strip():
-                self.events.append(e.strip())
-            elif isinstance(e, dict) and e.get("event"):
-                self.events.append(e.get("event"))
+        # Legacy: Global event parsing is disabled to save tokens
+        # We now build timeline from character events
+        pass
 
     def _merge_summary(self, summary: str) -> None:
         summary = summary.strip()
@@ -895,9 +907,30 @@ class MasterData:
 
         # Timeline
         timeline = []
-        for i, event in enumerate(self.events):
-            event_text = event if isinstance(event, str) else event.get("event", "")
-            timeline.append({"sequence": i + 1, "event": event_text})
+        all_events = []
+        for key, data in self.characters.items():
+            char_name = data.get("display_name", key)
+            for event in data.get("events", []):
+                # Ensure we have a valid percentage
+                pct = event.get("percent", 0)
+                text = event.get("event", "").strip()
+                if text:
+                    # Prepend character name
+                    full_text = f"{char_name}{text}"
+                    all_events.append({"event": full_text, "percent": pct})
+
+        # Sort by percentage
+        all_events.sort(key=lambda x: x["percent"])
+
+        # Add sequence numbers
+        for i, event in enumerate(all_events):
+            timeline.append(
+                {
+                    "sequence": i + 1,
+                    "event": event["event"],
+                    "percent": event["percent"],
+                }
+            )
 
         # Themes
         filtered_themes = [t for t in self.themes if t not in META_THEMES]
@@ -1850,7 +1883,7 @@ def main() -> None:
     if output_dir is None:
         return
 
-    _cache_dir = os.path.join(output_dir, "ai_cache")
+    _cache_dir = os.path.join(output_dir, ".ai_cache")
     os.makedirs(_cache_dir, exist_ok=True)
 
     resume_pct, resume_data = find_resume_checkpoint(output_dir)
