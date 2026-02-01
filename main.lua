@@ -2,6 +2,7 @@
 
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
+local ProgressbarDialog = require("ui/widget/progressbardialog")
 local Menu = require("ui/widget/menu")
 local WidgetContainer = require("ui/widget/container/widgetcontainer")
 local logger = require("logger")
@@ -207,15 +208,15 @@ function XRayPlugin:loadSettings()
     end
 
     self.settings.show_characters = read_bool("xray_show_characters", true)
-    self.settings.show_chapter_characters = read_bool("xray_show_chapter_characters", true)
-    self.settings.show_character_notes = read_bool("xray_show_character_notes", true)
+    self.settings.show_chapter_characters = read_bool("xray_show_chapter_characters", false)
+    self.settings.show_character_notes = read_bool("xray_show_character_notes", false)
     self.settings.show_timeline = read_bool("xray_show_timeline", true)
-    self.settings.show_historical_figures = read_bool("xray_show_historical_figures", true)
+    self.settings.show_historical_figures = read_bool("xray_show_historical_figures", false)
     self.settings.show_locations = read_bool("xray_show_locations", true)
     self.settings.show_spoilers = read_bool("xray_show_spoilers", false)
-    self.settings.show_themes = read_bool("xray_show_themes", true)
-    self.settings.show_summary = read_bool("xray_show_summary", true)
-    self.settings.show_author_info = read_bool("xray_show_author_info", true)
+    self.settings.show_themes = read_bool("xray_show_themes", false)
+    self.settings.show_summary = read_bool("xray_show_summary", false)
+    self.settings.show_author_info = read_bool("xray_show_author_info", false)
     
     self.settings.sync_server = G_reader_settings:readSetting("xray_sync_server")
 end
@@ -1034,14 +1035,14 @@ function XRayPlugin:addToMainMenu(menu_items)
     end
 
     self.settings.show_characters = load_bool_setting("xray_show_characters", true)
-    self.settings.show_chapter_characters = load_bool_setting("xray_show_chapter_characters", true)
-    self.settings.show_character_notes = load_bool_setting("xray_show_character_notes", true)
+    self.settings.show_chapter_characters = load_bool_setting("xray_show_chapter_characters", false)
+    self.settings.show_character_notes = load_bool_setting("xray_show_character_notes", false)
     self.settings.show_timeline = load_bool_setting("xray_show_timeline", true)
-    self.settings.show_historical_figures = load_bool_setting("xray_show_historical_figures", true)
+    self.settings.show_historical_figures = load_bool_setting("xray_show_historical_figures", false)
     self.settings.show_locations = load_bool_setting("xray_show_locations", true)
-    self.settings.show_themes = load_bool_setting("xray_show_themes", true)
-    self.settings.show_summary = load_bool_setting("xray_show_summary", true)
-    self.settings.show_author_info = load_bool_setting("xray_show_author_info", true)
+    self.settings.show_themes = load_bool_setting("xray_show_themes", false)
+    self.settings.show_summary = load_bool_setting("xray_show_summary", false)
+    self.settings.show_author_info = load_bool_setting("xray_show_author_info", false)
 
     -- Use sub_item_table_func for lazy evaluation (sync on open) and native styling
     menu_items.xray = {
@@ -1483,11 +1484,10 @@ function XRayPlugin:downloadXRayData(force_download)
     
     if not self.settings.sync_server then return end
     
-    local InfoMessage = require("ui/widget/infomessage")
-    
     local function do_download(force)
-        local msg = InfoMessage:new{ text = self.loc:t("downloading") or "Downloading...", timeout = nil }
+        local msg = InfoMessage:new{ text = self.loc:t("listing_files") or "Listing files...", timeout = nil }
         UIManager:show(msg)
+        UIManager:forceRePaint()
         
         -- Ensure Cache Manager is loaded
         self:autoLoadCache()
@@ -1496,10 +1496,16 @@ function XRayPlugin:downloadXRayData(force_download)
             self.sync = Sync:new()
         end
         
+        local pd = nil
+        
         local book_path = self:getBookPath()
         if book_path then
             self.sync:download(self.cache_manager, self.settings.sync_server, book_path, function(success, fail, errors, skipped)
-                UIManager:close(msg)
+                if pd then 
+                    pd:close() 
+                end
+                if msg then UIManager:close(msg) end
+                
                 -- Reload cache
                 self:autoLoadCache()
                 
@@ -1521,7 +1527,25 @@ function XRayPlugin:downloadXRayData(force_download)
                     text = result_msg,
                     timeout = 10 -- Longer timeout to read errors
                 })
-            end, force) 
+            end, force, 
+            function(current, total, filename)
+                -- Progress callback
+                if msg then
+                    UIManager:close(msg)
+                    msg = nil
+                end
+                
+                if not pd then
+                    pd = ProgressbarDialog:new{
+                        title = self.loc:t("downloading") or "Downloading...",
+                        progress_max = total,
+                    }
+                    UIManager:show(pd)
+                    UIManager:forceRePaint()
+                else
+                    pd:reportProgress(current)
+                end
+            end) 
         else
             UIManager:close(msg)
         end
@@ -1532,10 +1556,13 @@ function XRayPlugin:downloadXRayData(force_download)
         
         UIManager:show(ConfirmBox:new{
             text = self.loc:t("download_warn"),
-            ok_text = self.loc:t("download_button") or "Download",
+            ok_text = self.loc:t("download") or "Download",
             cancel_text = _("Cancel"),
             ok_callback = function()
-                do_download(true) -- Force enabled
+                -- Schedule download to allow ConfirmBox to close and UI to update
+                UIManager:scheduleIn(0.1, function()
+                    do_download(true) -- Force enabled
+                end)
             end
         })
     else

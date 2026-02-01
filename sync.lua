@@ -268,7 +268,7 @@ function Sync:upload(cache_manager, server, book_path, callback)
     if callback then callback(success_count, fail_count, errors) end
 end
 
-function Sync:download(cache_manager, server, book_path, callback, force)
+function Sync:download(cache_manager, server, book_path, callback, force, progress_callback)
     if not server or not book_path then return end
 
     local api = self:getApi(server)
@@ -355,6 +355,10 @@ function Sync:download(cache_manager, server, book_path, callback, force)
                 local filename = item.display_name
                 if not filename and item.url then
                     filename = ffiutil.basename(item.url)
+                end
+                
+                if progress_callback then
+                    progress_callback(i, #items, filename)
                 end
                 
                 -- Skip directories
