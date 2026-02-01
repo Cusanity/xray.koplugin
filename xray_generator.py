@@ -226,6 +226,7 @@ def _save_preferences(prefs: dict[str, Any]) -> None:
 # =============================================================================
 
 _ai_client: OpenAI | None = None
+_selected_api: str = "openai"
 _selected_model: str = ""
 _book_title: str = ""
 _current_pct: int = 0
@@ -378,6 +379,20 @@ def normalize_location_name(name: str) -> str:
 # =============================================================================
 
 
+class MockResponse:
+    def __init__(self, content: str):
+        self.choices = [
+            type(
+                "obj",
+                (object,),
+                {
+                    "message": type("obj", (object,), {"content": content}),
+                    "finish_reason": "stop",
+                },
+            )
+        ]
+
+
 def call_ai_with_retry(
     client: OpenAI,
     model: str,
@@ -388,6 +403,37 @@ def call_ai_with_retry(
     delay: float = 2.0,
 ) -> Any:
     """Call AI with retry logic for timeouts and API errors."""
+
+    if _selected_api == "cusanity":
+        # Extract prompts
+        system_prompt = next(
+            (m["content"] for m in messages if m["role"] == "system"), ""
+        )
+        user_prompt = next((m["content"] for m in messages if m["role"] == "user"), "")
+
+        try:
+            import cusanity
+
+            # Using private _gemini_completion as requested
+            content = cusanity.ai_completion(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                provider=cusanity.Provider.GEMINI,  # Use public wrapper which calls _gemini_completion
+                model=model,
+                temperature=temperature,
+                top_p=TOP_P,
+                json_mode=True,
+                google_search=False,
+            )
+            return MockResponse(content)
+        except Exception as e:
+            print(f"    [Cusanity Error] {e}")
+            # Let existing retry logic handle or exit?
+            # Cusanity wrapper handles retries internally for models, but here we might want to catch specific errors.
+            # For now we re-raise to let the loop (if any) or user handle it.
+            # But since we return immediately, we rely on cusanity's internal robustness.
+            raise e
+
     current_delay = delay
     for attempt in range(retries):
         try:
@@ -1629,21 +1675,85 @@ def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
 # =============================================================================
 
 
+def display_api_selector() -> str:
+    """Display API selection menu."""
+    global _selected_api
+
+    prefs = _load_preferences()
+    last_api = prefs.get("last_api", "openai")
+
+    print(f"\n{'=' * 60}")
+    print("Select API Provider")
+    print(f"{'=' * 60}\n")
+
+    options = [("openai", "OpenAI (Standard)"), ("cusanity", "Cusanity (Gemini Proxy)")]
+
+    default_idx = -1
+    for i, (key, label) in enumerate(options, 1):
+        marker = (
+            " (last used)"
+            if key == last_api
+            else (" (default)" if key == "openai" and last_api != "cusanity" else "")
+        )
+        if key == last_api:
+            default_idx = i
+        print(f"  [{i}] {label}{marker}")
+
+    print(f"\n{'─' * 60}")
+    print("Enter number, or press Enter for default")
+
+    try:
+        user_input = input("\n> ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return "openai"
+
+    selected = last_api
+    if user_input:
+        try:
+            idx = int(user_input)
+            if 1 <= idx <= len(options):
+                selected = options[idx - 1][0]
+        except ValueError:
+            pass
+
+    prefs["last_api"] = selected
+    _save_preferences(prefs)
+    _selected_api = selected
+    return selected
+
+
 def display_model_selector() -> str | None:
     """Display model selection menu and return selected model name."""
     # Load last selected model preference
     prefs = _load_preferences()
     last_model = prefs.get("last_model", "")
 
+    # Combine available models with Cusanity fallbacks if enabled
+    current_models = list(AVAILABLE_MODELS)
+    if _selected_api == "cusanity":
+        try:
+            import cusanity
+
+            if hasattr(cusanity, "DEFAULT_GEMINI_FALLBACK_MODELS"):
+                # Append unique models from fallback list
+                for m in cusanity.DEFAULT_GEMINI_FALLBACK_MODELS:
+                    if m not in current_models:
+                        current_models.append(m)
+        except ImportError:
+            pass
+
     # Determine which model to show as default (prefer last used over env default)
-    effective_default = last_model if last_model in AVAILABLE_MODELS else MODEL_NAME
+    effective_default = last_model if last_model in current_models else MODEL_NAME
+    # If effective_default is not in the list (e.g. env var set to something else), add it momentarily
+    # or just accept it might not be in the numbered list but is "default".
+    # For simplicity, if it's not in the list, we might want to default to the first available or keep it.
 
     print(f"\n{'=' * 60}")
     print("Select AI Model")
     print(f"{'=' * 60}\n")
 
     default_idx = -1
-    for i, model in enumerate(AVAILABLE_MODELS, 1):
+    for i, model in enumerate(current_models, 1):
         markers = []
         if model == effective_default:
             markers.append("last used" if model == last_model else "default")
@@ -1670,8 +1780,8 @@ def display_model_selector() -> str | None:
 
     try:
         model_num = int(user_input)
-        if 1 <= model_num <= len(AVAILABLE_MODELS):
-            selected = AVAILABLE_MODELS[model_num - 1]
+        if 1 <= model_num <= len(current_models):
+            selected = current_models[model_num - 1]
             print(f"\nSelected model: {selected}")
             # Save preference
             prefs["last_model"] = selected
@@ -1686,11 +1796,31 @@ def display_model_selector() -> str | None:
 
 
 def main() -> None:
-    global _ai_client, _book_title, _selected_model, _cache_dir
+    global _ai_client, _book_title, _selected_model, _cache_dir, _selected_api
 
     target_path = _get_target_path()
     if target_path is None:
         return
+
+    _selected_api = display_api_selector()
+    if _selected_api == "cusanity":
+        # Attempt to import cusanity by adding repo to path (assuming adjacent folder structure)
+        # ../KOReader/xray.koplugin/xray_generator.py -> ../../cusanity_py
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        cusanity_path = os.path.join(repo_root, "cusanity_py")
+        if cusanity_path not in sys.path:
+            sys.path.append(cusanity_path)
+
+        try:
+            import cusanity
+
+            print(f"Using Cusanity Provider (v{cusanity.__version__})")
+        except ImportError:
+            print(f"Error: Could not import 'cusanity' from {cusanity_path}.")
+            print("Ensure the cusanity_py repo is checked out at that location.")
+            return
 
     selected_model = display_model_selector()
     if selected_model is None:
@@ -1698,7 +1828,9 @@ def main() -> None:
 
     _selected_model = selected_model
 
-    print(f"\nUsing API: {API_BASE_URL}")
+    print(f"\nUsing API Provider: {_selected_api}")
+    if _selected_api == "openai":
+        print(f"Using API URL: {API_BASE_URL}")
     print(f"Using Model: {selected_model}")
     print(f"\nReading {target_path}...")
 
@@ -1723,7 +1855,12 @@ def main() -> None:
 
     resume_pct, resume_data = find_resume_checkpoint(output_dir)
 
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY, timeout=AI_TIMEOUT_SECONDS)
+    client = None
+    if _selected_api != "cusanity":
+        client = OpenAI(
+            base_url=API_BASE_URL, api_key=API_KEY, timeout=AI_TIMEOUT_SECONDS
+        )
+
     _ai_client = client
     _book_title = title
 
