@@ -1048,7 +1048,7 @@ def scan_calibre_library(library_path: str) -> list[dict[str, str]]:
 
 def display_library_browser(
     books: list[dict[str, str]], page_size: int = 20
-) -> str | None:
+) -> list[str] | None:
     """Display interactive paginated book list and let user select."""
     if not books:
         print("No books found in Calibre library.")
@@ -1126,18 +1126,26 @@ def display_library_browser(
         )
 
         try:
-            user_input = input("\n> ").strip().lower()
+            raw_input = input("\n> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
             return None
 
+        user_input = raw_input.lower()
+
         if user_input == "q":
             print("Cancelled.")
             return None
-        elif user_input == "n" and current_page < total_pages - 1:
-            current_page += 1
-        elif user_input == "p" and current_page > 0:
-            current_page -= 1
+        elif user_input == "n":
+            if current_page < total_pages - 1:
+                current_page += 1
+            else:
+                print("Already at last page.")
+        elif user_input == "p":
+            if current_page > 0:
+                current_page -= 1
+            else:
+                print("Already at first page.")
         elif user_input == "s":
             query = input("Enter search term (title or author): ").strip()
             if query:
@@ -1162,25 +1170,78 @@ def display_library_browser(
             return selected["epub_path"]
         else:
             try:
-                book_num = int(user_input)
-                if 1 <= book_num <= total:
-                    selected = filtered_books[book_num - 1]
-                    print(f"\nSelected: {selected['title']} by {selected['author']}")
-                    # Save preference
-                    prefs["last_book_path"] = selected["epub_path"]
-                    # We store global index in refs for next startup?
-                    # Actually last_book_num was global index.
-                    # Let's find global index for saving.
+                # Support multiple selection (e.g. "1, 2, 5-7")
+                is_selection = True
+                cleaned = raw_input.replace("\uff0c", ",").replace(" ", ",")
+                parts = [p.strip() for p in cleaned.split(",") if p.strip()]
+
+                indices = []
+                for p in parts:
+                    if "-" in p:
+                        try:
+                            s, e = map(int, p.split("-"))
+                            if s > e:
+                                s, e = e, s
+                            indices.extend(range(s, e + 1))
+                        except ValueError:
+                            is_selection = False
+                            break
+                    else:
+                        try:
+                            indices.append(int(p))
+                        except ValueError:
+                            is_selection = False
+                            break
+
+                if not is_selection or not indices:
+                    raise ValueError("Not a selection")  # Fall to implicit search
+
+                valid_indices = sorted(
+                    list(set([i for i in indices if 1 <= i <= total]))
+                )
+
+                if not valid_indices:
+                    print(f"  [!] No valid book numbers in range (1-{total}).")
+                    continue
+
+                print()
+                selected_paths = []
+                for idx in valid_indices:
+                    sel = filtered_books[idx - 1]
+                    print(f"  [+] Selected: {filtered_books[idx - 1]['title']}")
+                    selected_paths.append(filtered_books[idx - 1]["epub_path"])
+
+                if selected_paths:
+                    # Save preference of the last valid selection to maintain continuity
+                    last_idx = valid_indices[-1]
+                    last_sel = filtered_books[last_idx - 1]
+                    prefs["last_book_path"] = last_sel["epub_path"]
                     for global_idx, b in enumerate(all_books):
-                        if b["epub_path"] == selected["epub_path"]:
+                        if b["epub_path"] == last_sel["epub_path"]:
                             prefs["last_book_num"] = global_idx + 1
                             break
                     _save_preferences(prefs)
-                    return selected["epub_path"]
-                else:
-                    print(f"Invalid book number. Enter 1-{total}.")
+
+                    # Deduplicate paths while preserving order
+                    seen = set()
+                    unique_paths = []
+                    for p in selected_paths:
+                        if p not in seen:
+                            seen.add(p)
+                            unique_paths.append(p)
+                    return unique_paths
+
             except ValueError:
-                print("Invalid input. Enter a book number, n, p, s, c, or q.")
+                # Implicit search
+                search_query = raw_input
+                print(f"Searching for: '{search_query}'")
+                filtered_books = [
+                    b
+                    for b in all_books
+                    if search_query.lower() in b["title"].lower()
+                    or search_query.lower() in b["author"].lower()
+                ]
+                current_page = 0
 
 
 # =============================================================================
@@ -1828,43 +1889,13 @@ def display_model_selector() -> str | None:
         return effective_default
 
 
-def main() -> None:
-    global _ai_client, _book_title, _selected_model, _cache_dir, _selected_api
+def process_book(target_path: str, client: OpenAI | None, selected_model: str) -> None:
+    """Process a single book: analyze and generate X-Ray."""
+    global _ai_client, _book_title, _cache_dir, _selected_model
 
-    target_path = _get_target_path()
-    if target_path is None:
-        return
-
-    _selected_api = display_api_selector()
-    if _selected_api == "cusanity":
-        # Attempt to import cusanity by adding repo to path (assuming adjacent folder structure)
-        # ../KOReader/xray.koplugin/xray_generator.py -> ../../cusanity_py
-        repo_root = os.path.dirname(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        )
-        cusanity_path = os.path.join(repo_root, "cusanity_py")
-        if cusanity_path not in sys.path:
-            sys.path.append(cusanity_path)
-
-        try:
-            import cusanity
-
-            print(f"Using Cusanity Provider (v{cusanity.__version__})")
-        except ImportError:
-            print(f"Error: Could not import 'cusanity' from {cusanity_path}.")
-            print("Ensure the cusanity_py repo is checked out at that location.")
-            return
-
-    selected_model = display_model_selector()
-    if selected_model is None:
-        return
-
+    _ai_client = client
     _selected_model = selected_model
 
-    print(f"\nUsing API Provider: {_selected_api}")
-    if _selected_api == "openai":
-        print(f"Using API URL: {API_BASE_URL}")
-    print(f"Using Model: {selected_model}")
     print(f"\nReading {target_path}...")
 
     reader = EpubReader(target_path)
@@ -1888,13 +1919,6 @@ def main() -> None:
 
     resume_pct, resume_data = find_resume_checkpoint(output_dir)
 
-    client = None
-    if _selected_api != "cusanity":
-        client = OpenAI(
-            base_url=API_BASE_URL, api_key=API_KEY, timeout=AI_TIMEOUT_SECONDS
-        )
-
-    _ai_client = client
     _book_title = title
 
     chunks = build_chunks(chapters)
@@ -2002,8 +2026,63 @@ def main() -> None:
     _finalize_output(master, output_dir)
 
 
-def _get_target_path() -> str | None:
-    """Get target EPUB path from CLI args or Calibre browser."""
+def main() -> None:
+    global _selected_api, _selected_model
+
+    target_paths = _get_target_paths()
+    if not target_paths:
+        return
+
+    _selected_api = display_api_selector()
+    if _selected_api == "cusanity":
+        # Attempt to import cusanity by adding repo to path (assuming adjacent folder structure)
+        # ../KOReader/xray.koplugin/xray_generator.py -> ../../cusanity_py
+        repo_root = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        cusanity_path = os.path.join(repo_root, "cusanity_py")
+        if cusanity_path not in sys.path:
+            sys.path.append(cusanity_path)
+
+        try:
+            import cusanity
+
+            print(f"Using Cusanity Provider (v{cusanity.__version__})")
+        except ImportError:
+            print(f"Error: Could not import 'cusanity' from {cusanity_path}.")
+            print("Ensure the cusanity_py repo is checked out at that location.")
+            return
+
+    selected_model = display_model_selector()
+    if selected_model is None:
+        return
+
+    client = None
+    if _selected_api != "cusanity":
+        client = OpenAI(
+            base_url=API_BASE_URL, api_key=API_KEY, timeout=AI_TIMEOUT_SECONDS
+        )
+
+    print(f"\n=== Batch Processing {len(target_paths)} Books ===")
+    print(f"API: {_selected_api} | Model: {selected_model}")
+
+    for i, path in enumerate(target_paths):
+        print(f"\n{'#' * 60}")
+        print(f"Processing Book {i + 1}/{len(target_paths)}")
+        print(f"{'#' * 60}")
+        try:
+            process_book(path, client, selected_model)
+        except Exception as e:
+            print(f"\nERROR processing {path}: {e}")
+            import traceback
+
+            traceback.print_exc()
+
+    print("\nBatch processing complete.")
+
+
+def _get_target_paths() -> list[str] | None:
+    """Get target EPUB path(s) from CLI args or Calibre browser."""
     if len(sys.argv) < 2 or sys.argv[1] in ("--browse", "-b", "--list", "-l"):
         print("X-Ray Generator - Calibre Library Browser")
         print(f"Scanning library: {CALIBRE_LIBRARY}")
@@ -2018,11 +2097,11 @@ def _get_target_path() -> str | None:
             return None
 
         print(f"Found {len(books)} EPUB books.\n")
-        target_path = display_library_browser(books)
-        if target_path is None:
+        target_paths = display_library_browser(books)
+        if not target_paths:
             return None
         print()
-        return target_path
+        return target_paths
 
     target_path = sys.argv[1]
     if not os.path.exists(target_path):
@@ -2037,7 +2116,7 @@ def _get_target_path() -> str | None:
         print("  CALIBRE_LIBRARY  - Path to Calibre library")
         return None
 
-    return target_path
+    return [target_path]
 
 
 def _setup_output_directory(target_path: str) -> str | None:
