@@ -398,7 +398,7 @@ def call_ai_with_retry(
     model: str,
     messages: list[dict[str, str]],
     temperature: float = 0.3,
-    max_tokens: int = 32768,
+    max_tokens: int = 8192,
     retries: int = 3,
     delay: float = 2.0,
 ) -> Any:
@@ -518,6 +518,7 @@ def consolidate_description_with_ai(
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
+            max_tokens=2048,
             retries=3,
         )
         content = response.choices[0].message.content
@@ -558,6 +559,7 @@ def consolidate_summary_with_ai(
                 {"role": "user", "content": prompt},
             ],
             temperature=0.3,
+            max_tokens=4096,
             retries=3,
         )
         content = response.choices[0].message.content
@@ -1167,7 +1169,7 @@ def display_library_browser(
             # Press Enter to select last book
             selected = filtered_books[current_last_book_idx]
             print(f"\nSelected: {selected['title']} by {selected['author']}")
-            return selected["epub_path"]
+            return [selected["epub_path"]]
         else:
             try:
                 # Support multiple selection (e.g. "1, 2, 5-7")
@@ -1671,6 +1673,7 @@ def _process_chunk_worker(
                 {"role": "user", "content": prompt},
             ],
             temperature=TEMPERATURE,
+            max_tokens=16384,
             retries=MAX_RETRIES + 1,
         )
 
