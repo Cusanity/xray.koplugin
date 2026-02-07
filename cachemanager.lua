@@ -193,7 +193,7 @@ function CacheManager:serialize(obj, indent, seen)
     end
 end
 
--- Clear cache for a book (includes main cache and all percentage-based caches)
+-- Clear cache for a book (includes main cache and all analysis caches)
 function CacheManager:clearCache(book_path)
     local cleared = false
     
@@ -209,18 +209,27 @@ function CacheManager:clearCache(book_path)
         end
     end
     
-    -- Clear all percentage-based caches (xx%.json files)
+    -- Clear analysis caches (xray_data.json and legacy xx%.json files)
     local analysis_dir = self:getAnalysisCacheDir(book_path)
     if analysis_dir and lfs.attributes(analysis_dir) then
+        -- Clear unified xray_data.json
+        local xray_data_file = analysis_dir .. "/xray_data.json"
+        local success, err = os.remove(xray_data_file)
+        if success then
+            logger.info("CacheManager: Cleared xray_data.json")
+            cleared = true
+        end
+        
+        -- Clear legacy percentage-based caches (xx%.json files)
         for file in lfs.dir(analysis_dir) do
             if file:match("^%d+%%%.json$") then
                 local filepath = analysis_dir .. "/" .. file
-                local success, err = os.remove(filepath)
-                if success then
+                local success_pct, err_pct = os.remove(filepath)
+                if success_pct then
                     logger.info("CacheManager: Cleared analysis cache:", file)
                     cleared = true
                 else
-                    logger.warn("CacheManager: Failed to clear:", file, err or "")
+                    logger.warn("CacheManager: Failed to clear:", file, err_pct or "")
                 end
             end
         end
@@ -239,7 +248,81 @@ function CacheManager:getAnalysisCacheDir(book_path)
     return sdr .. "/xray_analysis"
 end
 
+-- Load the unified xray_data.json file
+function CacheManager:getXRayData(book_path)
+    local dir = self:getAnalysisCacheDir(book_path)
+    if not dir then 
+        logger.info("CacheManager: getXRayData - no analysis dir for:", book_path)
+        return nil 
+    end
+    
+    local file = dir .. "/xray_data.json"
+    logger.info("CacheManager: Trying xray_data.json at:", file)
+    
+    local f = io.open(file, "r")
+    if not f then 
+        logger.info("CacheManager: xray_data.json not found")
+        return nil 
+    end
+    
+    local content = f:read("*a")
+    f:close()
+    
+    if content and #content > 0 then
+        local success, data = pcall(json.decode, content)
+        if success and data then
+            logger.info("CacheManager: Loaded xray_data.json successfully")
+            return data
+        else
+            logger.warn("CacheManager: Failed to parse xray_data.json:", data)
+        end
+    end
+    return nil
+end
+
+-- Get the appropriate description for a given reader progress
+-- descriptions: array of {percent=N, text="..."} sorted by percent ascending
+-- reader_progress: current reading position (0-100)
+-- Returns: the description with highest percent <= reader_progress,
+--          or the first/earliest description if reader hasn't reached any yet
+function CacheManager:getDescriptionForProgress(descriptions, reader_progress)
+    if not descriptions or #descriptions == 0 then
+        return ""
+    end
+    
+    -- Default to empty if no suitable description found
+    local best_text = ""
+    local best_pct = -1
+    local first_text = ""
+    local first_pct = 999
+    
+    for _, entry in ipairs(descriptions) do
+        local pct = entry.percent or 0
+        local text = entry.text or ""
+        
+        -- Track the first/earliest description as fallback
+        if pct < first_pct then
+            first_pct = pct
+            first_text = text
+        end
+        
+        -- Find highest percent that is <= reader_progress
+        if pct <= reader_progress and pct > best_pct then
+            best_pct = pct
+            best_text = text
+        end
+    end
+    
+    -- If no description found at or before current progress, use the first available
+    if best_text == "" and first_text ~= "" then
+        return first_text
+    end
+    
+    return best_text
+end
+
 -- Returns sorted list of {percent, filepath}
+-- Note: This now also detects xray_data.json for backward compat during transition
 function CacheManager:getAvailableCaches(book_path)
     local dir = self:getAnalysisCacheDir(book_path)
     if not dir then return {} end

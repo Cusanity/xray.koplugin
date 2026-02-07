@@ -66,7 +66,12 @@ CALIBRE_LIBRARY = os.environ.get(
 MAX_CHUNK_SIZE = 15000
 MAX_RETRIES = 2
 AI_TIMEOUT_SECONDS = 120.0
-MAX_WORKERS = 5
+
+
+def get_max_workers() -> int:
+    """Return max workers based on selected API."""
+    return 1 if _selected_api == "openai" else 5
+
 
 AVAILABLE_MODELS = (
     "gemini-3-flash",
@@ -231,6 +236,82 @@ _selected_model: str = ""
 _book_title: str = ""
 _current_pct: int = 0
 _cache_dir: str | None = None
+
+
+# =============================================================================
+# Progress Reporting (for Web Monitor)
+# =============================================================================
+
+
+# Web monitor integration (optional)
+_web_monitor_available = False
+_original_print = print  # Save original print function
+
+try:
+    from xray_web_monitor import update_progress_state, add_log_entry
+
+    _web_monitor_available = True
+
+    # Override print to send all output to web monitor
+    def print(*args, **kwargs):
+        """Custom print that also sends to web monitor."""
+        # Call original print
+        _original_print(*args, **kwargs)
+
+        # Send to web monitor if available
+        if _web_monitor_available and args:
+            try:
+                # Convert all args to string and join
+                message = " ".join(str(arg) for arg in args)
+                # Don't send empty messages or progress messages (they're handled separately)
+                if message and not message.startswith("[PROGRESS]"):
+                    add_log_entry(message)
+            except Exception:
+                pass  # Silently fail to avoid infinite loops
+
+except ImportError:
+    pass
+
+
+def emit_progress(
+    book: str = "",
+    pct: int = 0,
+    chunk: int = 0,
+    total: int = 0,
+    op: str = "",
+    stats: dict | None = None,
+) -> None:
+    """Emit progress update for web monitor."""
+    # Update web monitor if available
+    if _web_monitor_available:
+        try:
+            update_progress_state(
+                status="running" if op not in ("completed", "error") else op,
+                current_book=book if book else None,
+                progress_pct=pct,
+                current_chunk=chunk,
+                total_chunks=total,
+                current_operation=op.replace("_", " ") if op else None,
+                stats=stats,
+            )
+        except Exception as e:
+            _original_print(f"Warning: Failed to update web monitor: {e}")
+
+    # Also print for console output
+    parts = []
+    if book:
+        parts.append(f"book={book}")
+    if pct >= 0:
+        parts.append(f"pct={pct}")
+    if chunk >= 0:
+        parts.append(f"chunk={chunk}")
+    if total >= 0:
+        parts.append(f"total={total}")
+    if op:
+        parts.append(f"op={op}")
+
+    if parts:
+        _original_print(f"[PROGRESS] {' '.join(parts)}", flush=True)
 
 
 def get_ai_cache(prompt: str) -> dict[str, Any] | None:
@@ -404,10 +485,16 @@ def call_ai_with_retry(
 ) -> Any:
     """Call AI with retry logic for timeouts and API errors."""
 
-    # Infinite retry loop for both API errors and JSON parsing errors
+    # Retry loop with maximum 10 attempts for both API errors and JSON parsing errors
     attempt = 0
+    max_attempts = 10
     while True:
         attempt += 1
+        if attempt > max_attempts:
+            print(
+                f"\n[FATAL] Maximum retry attempts ({max_attempts}) exceeded. Exiting."
+            )
+            os._exit(1)
         try:
             if _selected_api == "cusanity":
                 # Extract prompts
@@ -441,6 +528,15 @@ def call_ai_with_retry(
                 except json.JSONDecodeError:
                     raise ValueError(f"Invalid JSON from Cusanity: {content[:100]}...")
 
+                # Success! Increment success counter
+                if _web_monitor_available:
+                    try:
+                        from xray_web_monitor import increment_ai_success_count
+
+                        increment_ai_success_count()
+                    except Exception:
+                        pass
+
                 return MockResponse(content)
 
             else:
@@ -466,9 +562,27 @@ def call_ai_with_retry(
                 except json.JSONDecodeError:
                     raise ValueError(f"Invalid JSON from OpenAI: {content[:100]}...")
 
+                # Success! Increment success counter
+                if _web_monitor_available:
+                    try:
+                        from xray_web_monitor import increment_ai_success_count
+
+                        increment_ai_success_count()
+                    except Exception:
+                        pass
+
                 return response
 
         except Exception as e:
+            # Increment retry counter and update web monitor
+            if _web_monitor_available:
+                try:
+                    from xray_web_monitor import increment_ai_retry_count
+
+                    increment_ai_retry_count()
+                except Exception:
+                    pass
+
             # Attempt to extract full response body from OpenAI/API error
             full_error = str(e)
             if hasattr(e, "response") and hasattr(e.response, "text"):
@@ -707,9 +821,10 @@ class MasterData:
             if simplified_name not in self.characters:
                 self.characters[simplified_name] = {
                     "display_name": simplified_name,
-                    "descriptions": [],
+                    "descriptions": [],  # Pending fragments for current chunk
+                    "historic_descriptions": [],  # [{"percent": X, "text": "..."}]
                     "events": [],
-                    "consolidated": None,
+                    "consolidated": None,  # Latest consolidated text (working copy)
                 }
 
             # If we already have a consolidated description, move it back to fragments
@@ -758,8 +873,9 @@ class MasterData:
             if simplified_name not in self.locations:
                 self.locations[simplified_name] = {
                     "display_name": simplified_name,
-                    "descriptions": [],
-                    "consolidated": None,
+                    "descriptions": [],  # Pending fragments for current chunk
+                    "historic_descriptions": [],  # [{"percent": X, "text": "..."}]
+                    "consolidated": None,  # Latest consolidated text (working copy)
                 }
 
             # If we already have a consolidated description, move it back to fragments
@@ -835,35 +951,53 @@ class MasterData:
         print(f"  [Summary] Consolidated to {len(consolidated)} chars")
 
     def apply_consolidation(
-        self, entity_type: str, name: str, consolidated_desc: str
+        self, entity_type: str, name: str, consolidated_desc: str, current_pct: int = 0
     ) -> None:
-        """Apply AI-consolidated description."""
+        """Apply AI-consolidated description and save it to history with percent."""
         target = self.characters if entity_type == "character" else self.locations
         if name in target:
             target[name]["consolidated"] = consolidated_desc
             target[name]["descriptions"] = []
+            # Append to historic_descriptions with current percentage
+            # Defensive: ensure list exists
+            if "historic_descriptions" not in target[name]:
+                target[name]["historic_descriptions"] = []
+            target[name]["historic_descriptions"].append(
+                {"percent": current_pct, "text": consolidated_desc}
+            )
 
     def to_output_json(self, progress_pct: int) -> dict[str, Any]:
-        """Convert to final output JSON format with importance-based limiting."""
+        """Convert to final output JSON format with progressive descriptions."""
 
         def score_importance(data: dict[str, Any]) -> int:
+            # Use total text length from historic_descriptions for scoring
+            historic = data.get("historic_descriptions", [])
+            if historic:
+                total_len = sum(len(d.get("text", "")) for d in historic)
+                return total_len + len(historic) * 50
             desc = data.get("consolidated") or " ".join(data.get("descriptions", []))
-            fragment_count = len(data.get("descriptions", []))
-            return len(desc) + (fragment_count * 50)
+            return len(desc)
 
-        # Characters
+        # Characters - output descriptions as array
         char_items = []
         for key, data in self.characters.items():
-            desc = (
-                data["consolidated"]
-                if data["consolidated"]
-                else " ".join(data["descriptions"])
-            )
             display_name = data.get("display_name", key)
+
+            # Build descriptions array from historic_descriptions
+            # If no historic, create one from current consolidated/pending
+            historic = data.get("historic_descriptions", [])
+            if not historic and (data.get("consolidated") or data.get("descriptions")):
+                # Fallback: create single entry from current state
+                current_text = data.get("consolidated") or " ".join(
+                    data.get("descriptions", [])
+                )
+                if current_text:
+                    historic = [{"percent": progress_pct, "text": current_text}]
+
             char_items.append(
                 {
                     "name": display_name,
-                    "description": desc,
+                    "descriptions": historic,
                     "events": sorted(
                         data.get("events", []), key=lambda x: x["percent"]
                     ),
@@ -875,32 +1009,37 @@ class MasterData:
         characters = [
             {
                 "name": c["name"],
-                "description": c["description"],
+                "descriptions": c["descriptions"],
                 "events": c["events"],
             }
             for c in char_items
         ]
 
-        # Locations
+        # Locations - output descriptions as array
         loc_items = []
         for key, data in self.locations.items():
-            desc = (
-                data["consolidated"]
-                if data["consolidated"]
-                else " ".join(data["descriptions"])
-            )
             display_name = data.get("display_name", key)
+
+            # Build descriptions array from historic_descriptions
+            historic = data.get("historic_descriptions", [])
+            if not historic and (data.get("consolidated") or data.get("descriptions")):
+                current_text = data.get("consolidated") or " ".join(
+                    data.get("descriptions", [])
+                )
+                if current_text:
+                    historic = [{"percent": progress_pct, "text": current_text}]
+
             loc_items.append(
                 {
                     "name": display_name,
-                    "description": desc,
+                    "descriptions": historic,
                     "_score": score_importance(data),
                 }
             )
 
         loc_items.sort(key=lambda x: x["_score"], reverse=True)
         locations = [
-            {"name": loc["name"], "description": loc["description"]}
+            {"name": loc["name"], "descriptions": loc["descriptions"]}
             for loc in loc_items
         ]
 
@@ -1554,25 +1693,18 @@ def build_chunks(chapters: list[tuple[str, str]]) -> list[tuple[list[str], str, 
 
 
 def find_resume_checkpoint(output_dir: str) -> tuple[int, dict[str, Any] | None]:
-    """Find and load the latest checkpoint from output directory."""
+    """Find and load checkpoint from xray_data.json if it exists."""
     resume_pct = 0
     resume_data = None
 
-    for filename in os.listdir(output_dir):
-        if filename.endswith(".json") and "%" in filename:
-            try:
-                pct = int(filename.replace("%.json", ""))
-                if pct > resume_pct:
-                    resume_pct = pct
-            except ValueError:
-                continue
-
-    if resume_pct > 0:
-        checkpoint_file = os.path.join(output_dir, f"{resume_pct}%.json")
+    checkpoint_file = os.path.join(output_dir, "xray_data.json")
+    if os.path.exists(checkpoint_file):
         try:
             with open(checkpoint_file, "r", encoding="utf-8") as f:
                 resume_data = json.load(f)
-            print(f"Found checkpoint at {resume_pct}%. Resuming from there...")
+            resume_pct = resume_data.get("analysis_progress", 0)
+            if resume_pct > 0:
+                print(f"Found checkpoint at {resume_pct}%. Resuming from there...")
         except (json.JSONDecodeError, IOError) as e:
             print(f"Warning: Could not load checkpoint {checkpoint_file}: {e}")
             print("Starting fresh...")
@@ -1593,10 +1725,13 @@ def restore_master_from_checkpoint(
         name = char.get("name", "").strip()
         if name:
             dedup_key = normalize_for_dedup(name)
+            # Handle new format: descriptions is array of {percent, text}
+            descriptions = char.get("descriptions", [])
             master.characters[dedup_key] = {
                 "display_name": name,
-                "descriptions": [char.get("description", "")],
-                "consolidated": char.get("description", ""),
+                "descriptions": [],  # Pending fragments - empty on resume
+                "historic_descriptions": descriptions,  # Restore historic
+                "consolidated": descriptions[-1]["text"] if descriptions else "",
                 "events": char.get("events", []),
             }
 
@@ -1604,10 +1739,13 @@ def restore_master_from_checkpoint(
         name = loc.get("name", "").strip()
         if name:
             dedup_key = normalize_location_name(name)
+            # Handle new format: descriptions is array of {percent, text}
+            descriptions = loc.get("descriptions", [])
             master.locations[dedup_key] = {
                 "display_name": name,
-                "descriptions": [loc.get("description", "")],
-                "consolidated": loc.get("description", ""),
+                "descriptions": [],  # Pending fragments - empty on resume
+                "historic_descriptions": descriptions,  # Restore historic
+                "consolidated": descriptions[-1]["text"] if descriptions else "",
             }
 
     for theme in resume_data.get("themes", []):
@@ -1725,7 +1863,9 @@ def _process_chunk_worker(
     return None
 
 
-def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
+def consolidate_pending_items(
+    client: OpenAI, master: MasterData, current_pct: int = 0
+) -> None:
     """Check and consolidate items needing AI consolidation using ThreadPoolExecutor."""
     chars_to_consolidate, locs_to_consolidate = master.get_items_needing_consolidation()
 
@@ -1744,7 +1884,9 @@ def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
         consolidated = consolidate_description_with_ai(client, entity_type, name, desc)
         return entity_type, name, consolidated
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=get_max_workers()
+    ) as executor:
         futures = []
         for name, combined_desc in chars_to_consolidate:
             futures.append(
@@ -1758,7 +1900,7 @@ def consolidate_pending_items(client: OpenAI, master: MasterData) -> None:
         for future in concurrent.futures.as_completed(futures):
             try:
                 etype, name, consolidated = future.result()
-                master.apply_consolidation(etype, name, consolidated)
+                master.apply_consolidation(etype, name, consolidated, current_pct)
                 print(f"    ✓ [{etype[:4].capitalize()}] {name} updated")
             except Exception as e:
                 print(f"    [Consolidation Error]: {e}")
@@ -1930,6 +2072,9 @@ def process_book(target_path: str, client: OpenAI | None, selected_model: str) -
         f"Will process in {total_chunks} chapter-based chunks (max {MAX_CHUNK_SIZE} chars each)"
     )
 
+    # Emit initial progress
+    emit_progress(book=title, pct=0, chunk=0, total=total_chunks, op="initializing")
+
     master = MasterData(book_title=title, author=author)
     start_step = _calculate_start_step(
         resume_pct, resume_data, chunks, total_len, master, title, author, total_chunks
@@ -1939,7 +2084,12 @@ def process_book(target_path: str, client: OpenAI | None, selected_model: str) -
         return
 
     print("\n=== Starting Analysis with Python-Maintained Data Architecture ===")
-    print(f"    (Parallel Execution with {MAX_WORKERS} workers)")
+    print(f"    (Parallel Execution with {get_max_workers()} workers)")
+
+    # Emit progress for analysis start
+    emit_progress(
+        book=title, pct=0, chunk=start_step, total=total_chunks, op="analyzing"
+    )
 
     # Prepare chunk parameters list
     chunk_tasks = []
@@ -1968,7 +2118,9 @@ def process_book(target_path: str, client: OpenAI | None, selected_model: str) -
         )
 
     # Execute chunks in parallel but merge in order
-    with concurrent.futures.ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+    with concurrent.futures.ThreadPoolExecutor(
+        max_workers=get_max_workers()
+    ) as executor:
         # Submit all tasks
         futures = {}
         for task in chunk_tasks:
@@ -2012,25 +2164,93 @@ def process_book(target_path: str, client: OpenAI | None, selected_model: str) -
                         f"  [Merged] Chars: {stats['characters']}, Locs: {stats['locations']}, Events: {stats['events']}"
                     )
 
-                    # Intermediate consolidation to keep checkpoints clean
-                    consolidate_pending_items(client, master)
+                    # Emit progress update with stats
+                    emit_progress(
+                        book=title,
+                        pct=task["end_pct"],
+                        chunk=idx,
+                        total=total_chunks,
+                        op="merging",
+                        stats=stats,
+                    )
 
-                    # Save Checkpoint
+                    # Intermediate consolidation to keep checkpoints clean
+                    emit_progress(
+                        book=title,
+                        pct=task["end_pct"],
+                        chunk=idx,
+                        total=total_chunks,
+                        op="consolidating",
+                    )
+                    consolidate_pending_items(client, master, task["end_pct"])
+
+                    # Save to single xray_data.json (overwrite on each chunk)
                     output_data = master.to_output_json(task["end_pct"])
-                    filename = os.path.join(output_dir, f"{task['end_pct']}%.json")
+                    filename = os.path.join(output_dir, "xray_data.json")
                     with open(filename, "w", encoding="utf-8") as f:
                         json.dump(output_data, f, ensure_ascii=False, indent=2)
                     print(f"  Saved {filename}")
+
+                    # Emit progress after save
+                    emit_progress(
+                        book=title,
+                        pct=task["end_pct"],
+                        chunk=idx,
+                        total=total_chunks,
+                        op="saved_checkpoint",
+                    )
                 else:
                     print(f"  [Chunk {idx}] Skipped due to AI failure/filtering.")
             except Exception as e:
                 print(f"  [Chunk {idx}] Fatal Error in worker: {e}")
 
+    # Emit final progress
+    emit_progress(
+        book=title, pct=100, chunk=total_chunks, total=total_chunks, op="finalizing"
+    )
     _finalize_output(master, output_dir)
+    emit_progress(
+        book=title, pct=100, chunk=total_chunks, total=total_chunks, op="completed"
+    )
 
 
 def main() -> None:
     global _selected_api, _selected_model
+
+    # Start web monitor in background thread
+    web_monitor_thread = None
+    try:
+        import uvicorn
+        import threading
+        from xray_web_monitor import app
+
+        def run_web_monitor():
+            """Run web monitor in background thread."""
+            uvicorn.run(app, host="0.0.0.0", port=8765, log_level="error")
+
+        web_monitor_thread = threading.Thread(target=run_web_monitor, daemon=True)
+        web_monitor_thread.start()
+
+        # Get local IP for easier mobile access
+        import socket
+
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+        except Exception:
+            local_ip = "localhost"
+
+        print("\n" + "=" * 70)
+        print("Web Monitor:")
+        print(f"  Local:   http://localhost:8765")
+        print(f"  Network: http://{local_ip}:8765")
+        print("=" * 70 + "\n")
+    except ImportError:
+        print(
+            "\n[Info] Web monitor not available (install: pip install fastapi uvicorn)\n"
+        )
 
     target_paths = _get_target_paths()
     if not target_paths:
@@ -2176,28 +2396,18 @@ def _calculate_start_step(
 
 
 def _finalize_output(master: MasterData, output_dir: str) -> None:
-    """Generate and save final output files."""
+    """Generate and save final output file."""
     final_data = master.to_output_json(100)
     print(f"\n=== Final Analysis: {len(final_data['timeline'])} timeline events ===")
 
-    filename = os.path.join(output_dir, "100%.json")
+    filename = os.path.join(output_dir, "xray_data.json")
     with open(filename, "w", encoding="utf-8") as f:
         json.dump(final_data, f, ensure_ascii=False, indent=2)
     print(f"\nSaved final analysis to {filename}")
 
-    json_files = sorted(
-        [f for f in os.listdir(output_dir) if f.endswith("%.json") and f != "0%.json"],
-        key=lambda x: int(x.replace("%.json", "")),
-    )
-    if json_files:
-        first_file = os.path.join(output_dir, json_files[0])
-        zero_file = os.path.join(output_dir, "0%.json")
-        shutil.copy2(first_file, zero_file)
-        print(f"Copied {json_files[0]} → 0%.json for users at book start")
-
     print("\n=== Done! ===")
     print(f"Output directory: {output_dir}")
-    print("Copy the *.json files to your book's .sdr/xray_analysis/ folder.")
+    print("Copy xray_data.json to your book's .sdr/xray_analysis/ folder.")
 
 
 if __name__ == "__main__":

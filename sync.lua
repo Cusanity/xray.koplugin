@@ -258,7 +258,8 @@ function Sync:upload(cache_manager, server, book_path, callback)
     if lfs.attributes(paths.analysis_dir) and lfs.attributes(paths.analysis_dir, "mode") == "directory" then
         -- Now upload local analysis files
         for file in lfs.dir(paths.analysis_dir) do
-            if file:match("^%d+%%%.json$") then
+            -- Handle both legacy X%.json files and new xray_data.json
+            if file:match("^%d+%%%.json$") or file == "xray_data.json" then
                 local local_file = paths.analysis_dir .. "/" .. file
                 upload_file(local_file, remote_analysis_dir, remote_analysis_items)
             end
@@ -324,7 +325,8 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
         local has_local_files = false
         if lfs.attributes(paths.analysis_dir) then
              for file in lfs.dir(paths.analysis_dir) do
-                 if file:match("^%d+%%%.json$") then
+                 -- Handle both legacy X%.json files and new xray_data.json
+                 if file:match("^%d+%%%.json$") or file == "xray_data.json" then
                      has_local_files = true
                      break
                  end
@@ -335,7 +337,8 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
             if lfs.attributes(paths.analysis_dir) then
                 logger.info("Sync: Force download requested. Deleting local analysis files.")
                 for file in lfs.dir(paths.analysis_dir) do
-                    if file:match("^%d+%%%.json$") then
+                    -- Handle both legacy X%.json files and new xray_data.json
+                    if file:match("^%d+%%%.json$") or file == "xray_data.json" then
                         os.remove(paths.analysis_dir .. "/" .. file)
                     end
                 end
@@ -366,7 +369,8 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
                     goto continue
                 end
     
-                if filename and filename:match("^%d+%%%.json$") then
+                -- Handle both legacy X%.json files and new xray_data.json
+                if filename and (filename:match("^%d+%%%.json$") or filename == "xray_data.json") then
                      local local_dest = paths.analysis_dir .. "/" .. filename
                      download_file(item, local_dest)
                 end

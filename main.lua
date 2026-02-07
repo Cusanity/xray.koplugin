@@ -248,6 +248,45 @@ function XRayPlugin:init()
     logger.info("XRayPlugin v1.0.0: Initialized with language:", self.loc:getLanguage())
 end
 
+-- Get current reader progress as percentage (0-100)
+function XRayPlugin:getReaderProgress()
+    -- Try to get progress from the view module (works for EPUBs)
+    if self.ui and self.ui.view and self.ui.view.footer then
+        local footer = self.ui.view.footer
+        if footer.progress_bar and footer.progress_bar.percentage then
+            local pct = math.floor(footer.progress_bar.percentage * 100)
+            logger.dbg("XRayPlugin: getReaderProgress from footer:", pct)
+            return pct
+        end
+    end
+    
+    -- Try to get from document
+    if self.ui and self.ui.document then
+        local doc = self.ui.document
+        local current = doc:getCurrentPage() or 1
+        local total = doc:getPageCount() or 1
+        if total > 1 then
+            local pct = math.floor((current / total) * 100)
+            logger.dbg("XRayPlugin: getReaderProgress from document:", pct, current, "/", total)
+            return pct
+        end
+    end
+    
+    -- Try to get from rolling module (EPUBs)
+    if self.ui and self.ui.rolling then
+        local pos = self.ui.rolling:getProgress()
+        if pos then
+            local pct = math.floor(pos * 100)
+            logger.dbg("XRayPlugin: getReaderProgress from rolling:", pct)
+            return pct
+        end
+    end
+    
+    -- Default to 100 if unavailable (show all descriptions)
+    logger.dbg("XRayPlugin: getReaderProgress defaulting to 100")
+    return 100
+end
+
 function XRayPlugin:onReaderReady()
     -- Initialize simple sync
     self.sync = Sync:new()
@@ -424,7 +463,14 @@ function XRayPlugin:autoLoadCache()
     if not book_path then return end
     
     logger.info("XRayPlugin: Auto-loading cache for:", book_path)
-    local cached_data = self.cache_manager:loadCache(book_path)
+    
+    -- Try new xray_data.json first
+    local cached_data = self.cache_manager:getXRayData(book_path)
+    
+    -- Fallback to legacy xray_cache.lua if not found
+    if not cached_data then
+        cached_data = self.cache_manager:loadCache(book_path)
+    end
     
     if cached_data then
         self.xray_data = cached_data
@@ -446,7 +492,7 @@ function XRayPlugin:autoLoadCache()
                 deathDate = cached_data.author_death
             }
         end
-        local cache_age = math.floor((os.time() - cached_data.cached_at) / 86400)
+        local cache_age = cached_data.cached_at and math.floor((os.time() - cached_data.cached_at) / 86400) or 0
         
         logger.info("XRayPlugin: Auto-loaded from cache -", #self.characters, "characters,", 
                     cache_age, "days old")
@@ -1038,11 +1084,9 @@ function XRayPlugin:addToMainMenu(menu_items)
     -- Use sub_item_table_func for lazy evaluation (sync on open) and native styling
     menu_items.xray = {
         text_func = function()
-            local percent_str = ""
-            if self.xray_data and self.xray_data.analysis_progress then
-                percent_str = " (" .. self.xray_data.analysis_progress .. "%)"
-            end
-            return self.loc:t("menu_xray") .. percent_str
+            -- Show current reader progress (what filtering uses)
+            local reader_pct = self:getReaderProgress()
+            return self.loc:t("menu_xray") .. " (" .. reader_pct .. "%)"
         end,
         sorting_hint = "tools",
         sub_item_table_func = function()
@@ -2045,7 +2089,18 @@ function XRayPlugin:showLocationDetails(location)
     if not location then return end
     
     local name = location.name or "Unknown"
-    local description = location.description or ""
+    
+    -- Handle new descriptions array format with progress filtering
+    local description = ""
+    if location.descriptions and #location.descriptions > 0 then
+        -- Get current reader progress (default to 100 if unavailable)
+        local progress = self:getReaderProgress()
+        description = self.cache_manager:getDescriptionForProgress(location.descriptions, progress)
+    elseif location.description then
+        -- Fallback to legacy single description field
+        description = location.description
+    end
+    
     local metadata = {}
     
     if location.importance then
@@ -2199,7 +2254,18 @@ function XRayPlugin:showCharacterDetails(character)
     if not character then return end
     
     local name = character.name or "Unknown"
-    local description = character.description or ""
+    
+    -- Handle new descriptions array format with progress filtering
+    local description = ""
+    if character.descriptions and #character.descriptions > 0 then
+        -- Get current reader progress (default to 100 if unavailable)
+        local progress = self:getReaderProgress()
+        description = self.cache_manager:getDescriptionForProgress(character.descriptions, progress)
+    elseif character.description then
+        -- Fallback to legacy single description field
+        description = character.description
+    end
+    
     local metadata = {}
     
     if character.role then
@@ -2214,11 +2280,23 @@ function XRayPlugin:showCharacterDetails(character)
     
     local extra_buttons = {}
     
-    if character.events and #character.events > 0 then
+    -- Filter events by reader progress
+    local progress = self:getReaderProgress()
+    local filtered_events = {}
+    if character.events then
+        for _, event in ipairs(character.events) do
+            local event_pct = event.percent or 0
+            if event_pct <= progress then
+                table.insert(filtered_events, event)
+            end
+        end
+    end
+    
+    if #filtered_events > 0 then
         table.insert(extra_buttons, {
-            text = (self.loc:t("view_events") or "View Events") .. " (" .. #character.events .. ")",
+            text = (self.loc:t("view_events") or "View Events") .. " (" .. #filtered_events .. ")",
             callback = function()
-                self:showCharacterEventsList(character, character.events)
+                self:showCharacterEventsList(character, filtered_events)
             end
         })
     end
@@ -3154,8 +3232,11 @@ function XRayPlugin:showQuickXRayMenu()
         },
     }
     
+    
+    -- Show reader progress in title (this is what filtering uses)
+    local reader_pct = self:getReaderProgress()
     self.quick_dialog = ButtonDialog:new{
-        title = self.loc:t("quick_menu_title") .. (self.xray_data and self.xray_data.analysis_progress and " (" .. self.xray_data.analysis_progress .. "%)" or ""),
+        title = self.loc:t("quick_menu_title") .. " (" .. reader_pct .. "%)",
         buttons = buttons,
     }
     
@@ -3242,7 +3323,38 @@ function XRayPlugin:syncCacheFromPartials()
         self.cache_manager = CacheManager:new()
     end
     
-    -- 1. Get current reading progress
+    local book_path = self:getBookPath()
+    if not book_path then return end
+    
+    -- ========================================
+    -- NEW: Try xray_data.json first (unified format)
+    -- This file contains all descriptions with progress info
+    -- ========================================
+    local xray_data = self.cache_manager:getXRayData(book_path)
+    if xray_data then
+        -- Already have data loaded with same source? Skip reload
+        if self.xray_data and self.xray_data._source == "xray_data.json" then
+            return
+        end
+        
+        logger.info("XRayPlugin: Loaded xray_data.json successfully")
+        xray_data._source = "xray_data.json"
+        
+        self.xray_data = xray_data
+        self.book_data = xray_data
+        self.characters = xray_data.characters or {}
+        self.locations = xray_data.locations or {}
+        self.themes = xray_data.themes or {}
+        self.summary = xray_data.summary
+        self.timeline = xray_data.timeline or {}
+        self.historical_figures = xray_data.historical_figures or {}
+        self.author_info = xray_data.author_info
+        return
+    end
+    
+    -- ========================================
+    -- LEGACY: Fall back to X%.json partial cache system
+    -- ========================================
     local current_page, total_pages, progress = self:getReadingProgress()
     if not progress then progress = 100 end -- Fallback
 
@@ -3251,11 +3363,7 @@ function XRayPlugin:syncCacheFromPartials()
         progress = 100
     end
 
-    
-    local book_path = self:getBookPath()
-    if not book_path then return end
-    
-    -- 2. Find nearest partial cache <= progress
+    -- Find nearest partial cache <= progress
     local partial = self.cache_manager:getNearestPartialCache(book_path, progress)
     
     if partial then
@@ -3271,16 +3379,6 @@ function XRayPlugin:syncCacheFromPartials()
             main_cache_time = attr.modification
         end
         
-        -- Logic Change: We ALWAYS overwrite if we found a "better" context-aware partial
-        -- because the user might have jumped BACK. Even if main cache is "newer" (timestamp),
-        -- it might contain spoilers (100% data) when we are at 20%.
-        -- So we prioritize the partial if it matches our context better?
-        -- Actually, if main cache exists and covers 100%, and we are at 20%, maybe we SHOULD show 100% data?
-        -- User request: "without any ai request, the plugin should be able to load the nearest *%.json and rebuild xray_cache.lua"
-        -- "scenario: read 40%, go back 20%, clicked X-ray... load nearest *%.json"
-        -- This implies strictly loading the partial corresponding to current location, ignoring main cache's "completeness".
-        -- Yes, "rebuild xray_cache.lua".
-        
         logger.info("XRayPlugin: Syncing cache. Current:", progress, "%, Found partial:", partial.percent, "%")
         
         -- Parse content to ensure valid JSON before saving
@@ -3289,12 +3387,9 @@ function XRayPlugin:syncCacheFromPartials()
         
         if success and data then
              -- Force analysis_progress to match the partial we found
-             -- This ensures the data is consistent with the filename (e.g. 22%.json -> 22%)
              data.analysis_progress = partial.percent
              
              -- Save as main cache (Rewind/Contextualize)
-             -- Only save if the data inside is actually different or if we want to force the view
-             -- We just overwrite `xray_cache.lua` to be the 20% version.
              if self.cache_manager:saveCache(book_path, data) then
                  -- Reload
                  self:autoLoadCache()
