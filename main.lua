@@ -293,6 +293,48 @@ function XRayPlugin:getReaderProgress()
     return 100
 end
 
+-- Check if an entity (character, location, etc.) is visible at current progress
+function XRayPlugin:isEntityVisible(entity, progress)
+    if not entity then return false end
+    
+    -- 1. Check top-level percent (Timeline events, or manually set)
+    -- If it exists, it must be <= progress
+    if entity.percent then
+        return entity.percent <= progress
+    end
+    
+    -- 2. Check descriptions (formatted as array of {percent, text})
+    if entity.descriptions and #entity.descriptions > 0 then
+        for _, desc in ipairs(entity.descriptions) do
+            if (desc.percent or 0) <= progress then
+                return true
+            end
+        end
+        -- If none are visible, entity is hidden (unless it has events)
+    elseif entity.description then
+        -- Legacy single description = always visible
+        return true
+    end
+    
+    -- 3. Check events (formatted as array of {percent, event})
+    if entity.events and #entity.events > 0 then
+         for _, evt in ipairs(entity.events) do
+             if (evt.percent or 0) <= progress then
+                 return true
+             end
+         end
+    end
+    
+    -- If no percent, no descriptions (or none visible), no events (or none visible)
+    -- Then it's probably not visible, unless it's a raw legacy item with just name?
+    -- Assume legacy items without percent are visible (0%)
+    if not entity.descriptions and not entity.events and not entity.percent then
+        return true
+    end
+    
+    return false
+end
+
 function XRayPlugin:onReaderReady()
     -- Initialize simple sync
     self.sync = Sync:new()
@@ -679,12 +721,25 @@ function XRayPlugin:showXRayPopup(entity, entity_type)
 end
 
 function XRayPlugin:getMenuCounts()
+    local progress = self:getReaderProgress()
+    
+    local function count_filtered(list)
+        if not list then return 0 end
+        local count = 0
+        for _, item in ipairs(list) do
+            if self:isEntityVisible(item, progress) then
+                count = count + 1
+            end
+        end
+        return count
+    end
+
     return {
-        characters = self.characters and #self.characters or 0,
-        locations = self.locations and #self.locations or 0,
-        themes = self.themes and #self.themes or 0,
-        timeline = self.timeline and #self.timeline or 0,
-        historical_figures = self.historical_figures and #self.historical_figures or 0,
+        characters = count_filtered(self.characters),
+        locations = count_filtered(self.locations),
+        themes = count_filtered(self.themes),
+        timeline = count_filtered(self.timeline),
+        historical_figures = count_filtered(self.historical_figures),
     }
 end
 
@@ -801,9 +856,10 @@ function XRayPlugin:getXRaySubMenuItems()
     end
     
     local percentage = 0
-    if self.xray_data and self.xray_data.analysis_progress then
-        percentage = self.xray_data.analysis_progress
-    end
+    -- Use getReaderProgress() to show EFFECTIVE X-Ray (what is visible)
+    -- If Full Text Mode is ON, this returns 100%.
+    -- If OFF, it returns current reading %.
+    percentage = self:getReaderProgress()
     
     local _, _, reading_progress = self:getReadingProgress()
     reading_progress = reading_progress or 0
@@ -1212,37 +1268,42 @@ function XRayPlugin:showCharacters()
     })
     
     -- Add characters
+    local progress = self:getReaderProgress()
+    
     for i, char in ipairs(self.characters) do
-        -- CRITICAL: Ensure char and char.name exist
-        if char and type(char) == "table" then
-            local name = char.name
-            
-            -- Ensure name is a string
-            if type(name) ~= "string" or name == "" then
-                name = self.loc:t("unknown_character") or "Unknown Character"
-            end
-            
-            local text = name
-            
-            -- CRITICAL: Ensure text is not nil
-            if text and type(text) == "string" and #text > 0 then
-                table.insert(items, {
-                    text = text,
-                    callback = function()
-                        self:showCharacterDetails(char)
-                    end
-                })
+        -- Filter by visibility
+        if self:isEntityVisible(char, progress) then
+            -- CRITICAL: Ensure char and char.name exist
+            if char and type(char) == "table" then
+                local name = char.name
+                
+                -- Ensure name is a string
+                if type(name) ~= "string" or name == "" then
+                    name = self.loc:t("unknown_character") or "Unknown Character"
+                end
+                
+                local text = name
+                
+                -- CRITICAL: Ensure text is not nil
+                if text and type(text) == "string" and #text > 0 then
+                    table.insert(items, {
+                        text = text,
+                        callback = function()
+                            self:showCharacterDetails(char)
+                        end
+                    })
+                else
+                    logger.warn("XRayPlugin: Skipping character with invalid text at index", i)
+                end
             else
-                logger.warn("XRayPlugin: Skipping character with invalid text at index", i)
+                logger.warn("XRayPlugin: Skipping invalid character at index", i)
             end
-        else
-            logger.warn("XRayPlugin: Skipping invalid character at index", i)
         end
     end
     
-    -- Ensure we have items to display
-    if #items <= 2 then
-        -- Only search and separator
+    -- Ensure we have items to display (1 is search button)
+    if #items < 2 then
+        -- Only search button
         UIManager:show(InfoMessage:new{
             text = self.loc:t("no_character_data") or "No valid character data",
             timeout = 3,
@@ -1251,7 +1312,8 @@ function XRayPlugin:showCharacters()
     end
     
     self.characters_menu = Menu:new{
-        title = (self.loc:t("menu_characters") or "Characters") .. " (" .. #self.characters .. ")",
+        -- Subtract 1 for search button
+        title = (self.loc:t("menu_characters") or "Characters") .. " (" .. (#items - 1) .. ")",
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2058,6 +2120,9 @@ function XRayPlugin:continueWithFetch(reading_percent)
 end
 
 function XRayPlugin:showLocations()
+    -- Filter by reader progress
+    local progress = self:getReaderProgress()
+    
     if not self.locations or #self.locations == 0 then
         UIManager:show(InfoMessage:new{
             text = self.loc:t("no_location_data"),
@@ -2068,18 +2133,21 @@ function XRayPlugin:showLocations()
     
     local items = {}
     for i, loc in ipairs(self.locations) do
-        local text = loc.name or "Unknown Location"
-        
-        table.insert(items, {
-            text = text,
-            callback = function()
-                self:showLocationDetails(loc)
-            end,
-        })
+        -- Check visibility
+        if self:isEntityVisible(loc, progress) then
+            local text = loc.name or "Unknown Location"
+            
+            table.insert(items, {
+                text = text,
+                callback = function()
+                    self:showLocationDetails(loc)
+                end,
+            })
+        end
     end
     
     self.location_menu = Menu:new{
-        title = self.loc:t("menu_locations") .. " (" .. #self.locations .. ")",
+        title = self.loc:t("menu_locations") .. " (" .. #items .. ")",
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2724,22 +2792,27 @@ function XRayPlugin:showThemes()
         return
     end
     
+    -- Filter by reader progress
+    local progress = self:getReaderProgress()
+    
     local items = {}
     for i, theme in ipairs(self.themes) do
         -- Support both string themes and object themes
         local theme_name = type(theme) == "table" and (theme.term or theme.name) or theme
         local theme_obj = type(theme) == "table" and theme or {name = theme}
         
-        table.insert(items, {
-            text = theme_name,
-            callback = function()
-                self:showThemeDetails(theme_obj)
-            end,
-        })
+        if self:isEntityVisible(theme_obj, progress) then
+            table.insert(items, {
+                text = theme_name,
+                callback = function()
+                    self:showThemeDetails(theme_obj)
+                end,
+            })
+        end
     end
     
     self.theme_menu = Menu:new{
-        title = self.loc:t("menu_themes") .. " (" .. #self.themes .. ")",
+        title = self.loc:t("menu_themes") .. " (" .. #items .. ")",
         item_table = items,
         is_popout = false,
         title_bar_fm_style = true,
@@ -2783,8 +2856,12 @@ function XRayPlugin:showTimeline()
     local timeline_menu
     local items = {}
     
+    local progress = self:getReaderProgress()
+    
     for i, event in ipairs(self.timeline) do
-        local text = event.event or "Event"
+        -- Filter by reader progress
+        if self:isEntityVisible(event, progress) then
+            local text = event.event or "Event"
         if event.chapter then
              text = text .. " (" .. self.loc:t("chapter") .. " " .. event.chapter .. ")"
         end
@@ -2824,10 +2901,11 @@ function XRayPlugin:showTimeline()
                 end
             end,
         })
+        end -- Close filtering if
     end
     
     self.timeline_menu = Menu:new{
-        title = self.loc:t("menu_timeline") .. " (" .. #self.timeline .. ")",
+        title = self.loc:t("menu_timeline") .. " (" .. #items .. ")",
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2848,23 +2926,28 @@ function XRayPlugin:showHistoricalFigures()
         return
     end
     
+    -- Filter by reader progress
+    local progress = self:getReaderProgress()
+    
     local items = {}
     for i, figure in ipairs(self.historical_figures) do
-        local text = figure.name or "Unknown"
-        if figure.role then
-            text = text .. " (" .. figure.role .. ")"
+        if self:isEntityVisible(figure, progress) then
+            local text = figure.name or "Unknown"
+            if figure.role then
+                text = text .. " (" .. figure.role .. ")"
+            end
+            
+            table.insert(items, {
+                text = text,
+                callback = function()
+                    self:showHistoricalFigureDetails(figure)
+                end,
+            })
         end
-        
-        table.insert(items, {
-            text = text,
-            callback = function()
-                self:showHistoricalFigureDetails(figure)
-            end,
-        })
     end
     
     self.historical_menu = Menu:new{
-        title = self.loc:t("menu_historical_figures") .. " (" .. #self.historical_figures .. ")",
+        title = self.loc:t("menu_historical_figures") .. " (" .. #items .. ")",
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
