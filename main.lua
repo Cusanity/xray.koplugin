@@ -250,6 +250,12 @@ end
 
 -- Get current reader progress as percentage (0-100)
 function XRayPlugin:getReaderProgress()
+    -- If Full Text Mode (show_spoilers) is enabled, always return 100 to show all data
+    if self.settings and self.settings.show_spoilers then
+        logger.dbg("XRayPlugin: getReaderProgress returning 100 (Full Text Mode)")
+        return 100
+    end
+    
     -- Try to get progress from the view module (works for EPUBs)
     if self.ui and self.ui.view and self.ui.view.footer then
         local footer = self.ui.view.footer
