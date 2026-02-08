@@ -875,85 +875,87 @@ function XRayPlugin:getXRaySubMenuItems()
         enabled = false, -- Info only
     })
     
-    if self.settings.show_characters then
-        table.insert(items, {
-            text = self.loc:t("menu_characters") .. (counts.characters > 0 and " (" .. counts.characters .. ")" or ""),
-            callback = function()
-                self:showCharacters()
-            end,
-        })
-    end
-
-    if self.settings.show_chapter_characters then
-        table.insert(items, {
-            text = self.loc:t("menu_chapter_characters"),
-            callback = function()
-                self:showChapterCharacters()
-            end,
-        })
-    end
-
-    if self.settings.show_character_notes then
-        table.insert(items, {
-            text = self.loc:t("menu_character_notes"),
-            callback = function()
-                self:showCharacterNotes()
-            end,
-        })
-    end
-
-    if self.settings.show_timeline then
-        table.insert(items, {
-            text = self.loc:t("menu_timeline") .. (counts.timeline > 0 and " (" .. counts.timeline .. ")" or ""),
-            callback = function()
-                self:showTimeline()
-            end,
-        })
-    end
-
-    if self.settings.show_historical_figures then
-        table.insert(items, {
-            text = self.loc:t("menu_historical_figures") .. (counts.historical_figures > 0 and " (" .. counts.historical_figures .. ")" or ""),
-            callback = function()
-                self:showHistoricalFigures()
-            end,
-        })
-    end
-
-    if self.settings.show_locations then
-        table.insert(items, {
-            text = self.loc:t("menu_locations") .. (counts.locations > 0 and " (" .. counts.locations .. ")" or ""),
-            callback = function()
-                self:showLocations()
-            end,
-        })
-    end
-
-    if self.settings.show_author_info then
-        table.insert(items, {
-            text = self.loc:t("menu_author_info"),
-            callback = function()
-                self:showAuthorInfo()
-            end,
-        })
-    end
-
-    if self.settings.show_summary then
-        table.insert(items, {
-            text = self.loc:t("menu_summary"),
-            callback = function()
-                self:showSummary()
-            end,
-        })
-    end
-
-    if self.settings.show_themes then
-        table.insert(items, {
-            text = self.loc:t("menu_themes") .. (counts.themes > 0 and " (" .. counts.themes .. ")" or ""),
-            callback = function()
-                self:showThemes()
-            end,
-        })
+    if self.xray_data then
+        if self.settings.show_characters then
+            table.insert(items, {
+                text = self.loc:t("menu_characters") .. (counts.characters > 0 and " (" .. counts.characters .. ")" or ""),
+                callback = function()
+                    self:showCharacters()
+                end,
+            })
+        end
+    
+        if self.settings.show_chapter_characters then
+            table.insert(items, {
+                text = self.loc:t("menu_chapter_characters"),
+                callback = function()
+                    self:showChapterCharacters()
+                end,
+            })
+        end
+    
+        if self.settings.show_character_notes then
+            table.insert(items, {
+                text = self.loc:t("menu_character_notes"),
+                callback = function()
+                    self:showCharacterNotes()
+                end,
+            })
+        end
+    
+        if self.settings.show_timeline then
+            table.insert(items, {
+                text = self.loc:t("menu_timeline") .. (counts.timeline > 0 and " (" .. counts.timeline .. ")" or ""),
+                callback = function()
+                    self:showTimeline()
+                end,
+            })
+        end
+    
+        if self.settings.show_historical_figures then
+            table.insert(items, {
+                text = self.loc:t("menu_historical_figures") .. (counts.historical_figures > 0 and " (" .. counts.historical_figures .. ")" or ""),
+                callback = function()
+                    self:showHistoricalFigures()
+                end,
+            })
+        end
+    
+        if self.settings.show_locations then
+            table.insert(items, {
+                text = self.loc:t("menu_locations") .. (counts.locations > 0 and " (" .. counts.locations .. ")" or ""),
+                callback = function()
+                    self:showLocations()
+                end,
+            })
+        end
+    
+        if self.settings.show_author_info then
+            table.insert(items, {
+                text = self.loc:t("menu_author_info"),
+                callback = function()
+                    self:showAuthorInfo()
+                end,
+            })
+        end
+    
+        if self.settings.show_summary then
+            table.insert(items, {
+                text = self.loc:t("menu_summary"),
+                callback = function()
+                    self:showSummary()
+                end,
+            })
+        end
+    
+        if self.settings.show_themes then
+            table.insert(items, {
+                text = self.loc:t("menu_themes") .. (counts.themes > 0 and " (" .. counts.themes .. ")" or ""),
+                callback = function()
+                    self:showThemes()
+                end,
+            })
+        end
     end
 
     -- Separator attached to last item
@@ -1034,25 +1036,27 @@ function XRayPlugin:getXRaySubMenuItems()
     })
     --]]
 
-    table.insert(items, {
-        text = self.loc:t("menu_view_options") or "View Options",
-        keep_menu_open = true,
-        callback = function()
-            self:showViewOptions()
-        end,
-    })
-
-    table.insert(items, {
-        text = self.loc:t("menu_full_analysis") or "Full Analysis",
-        checked_func = function() return self.settings.show_spoilers end,
-        keep_menu_open = true,
-        callback = function()
-            self.settings.show_spoilers = not self.settings.show_spoilers
-            G_reader_settings:saveSetting("xray_show_spoilers", self.settings.show_spoilers)
-            -- Force sync immediately so user sees effect
-            self:syncCacheFromPartials()
-        end,
-    })
+    if self.xray_data then
+        table.insert(items, {
+            text = self.loc:t("menu_view_options") or "View Options",
+            keep_menu_open = true,
+            callback = function()
+                self:showViewOptions()
+            end,
+        })
+    
+        table.insert(items, {
+            text = self.loc:t("menu_full_analysis") or "Full Analysis",
+            checked_func = function() return self.settings.show_spoilers end,
+            keep_menu_open = true,
+            callback = function()
+                self.settings.show_spoilers = not self.settings.show_spoilers
+                G_reader_settings:saveSetting("xray_show_spoilers", self.settings.show_spoilers)
+                -- Force sync immediately so user sees effect
+                self:syncCacheFromPartials()
+            end,
+        })
+    end
 
     table.insert(items, {
         text = self.loc:t("menu_cloud_sync") or "Cloud Sync",
@@ -3264,8 +3268,10 @@ function XRayPlugin:showQuickXRayMenu()
     
     local ButtonDialog = require("ui/widget/buttondialog")
     
-    local buttons = {
-        {
+    local buttons = {}
+    
+    if self.xray_data then
+        table.insert(buttons, {
             {
                 text = self.loc:t("menu_characters"),
                 callback = function()
@@ -3273,8 +3279,9 @@ function XRayPlugin:showQuickXRayMenu()
                     self:showCharacters()
                 end,
             },
-        },
-        {
+        })
+        
+        table.insert(buttons, {
             {
                 text = self.loc:t("menu_chapter_characters"),
                 callback = function()
@@ -3282,8 +3289,9 @@ function XRayPlugin:showQuickXRayMenu()
                     self:showChapterCharacters()
                 end,
             },
-        },
-        {
+        })
+
+        table.insert(buttons, {
             {
                 text = self.loc:t("menu_timeline"),
                 callback = function()
@@ -3291,8 +3299,9 @@ function XRayPlugin:showQuickXRayMenu()
                     self:showTimeline()
                 end,
             },
-        },
-        {
+        })
+
+        table.insert(buttons, {
             {
                 text = self.loc:t("menu_historical_figures"),
                 callback = function()
@@ -3300,8 +3309,9 @@ function XRayPlugin:showQuickXRayMenu()
                     self:showHistoricalFigures()
                 end,
             },
-        },
-        {
+        })
+
+        table.insert(buttons, {
             {
                 text = self.loc:t("menu_character_notes"),
                 callback = function()
@@ -3309,17 +3319,18 @@ function XRayPlugin:showQuickXRayMenu()
                     self:showCharacterNotes()
                 end,
             },
-        },
+        })
+    end
+
+    table.insert(buttons, {
         {
-            {
-                text = self.loc:t("fetch_data"),
-                callback = function()
-                    UIManager:close(self.quick_dialog)
-                    self:fetchFromAI()
-                end,
-            },
+            text = self.loc:t("fetch_data"),
+            callback = function()
+                UIManager:close(self.quick_dialog)
+                self:fetchFromAI()
+            end,
         },
-    }
+    })
     
     
     -- Show reader progress in title (this is what filtering uses)
@@ -3489,7 +3500,6 @@ end
 
 function XRayPlugin:onShowXRayMenu()
     self:syncCacheFromPartials()
-    self:showQuickXRayMenu()
     self:showQuickXRayMenu()
     return true
 end
