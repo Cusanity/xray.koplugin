@@ -1,0 +1,24 @@
+# User configuration (contains API keys)
+config.lua
+.env
+
+# Cache and temporary files
+*.log
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+xray/
+__pycache__
+
+.xray_prefs.json
+
+# PyInstaller build artifacts
+build/
+dist/
+*.spec.bak
