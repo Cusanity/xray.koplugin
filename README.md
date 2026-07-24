@@ -1,519 +1,291 @@
-# 📖 X-Ray Plugin for KOReader
+# 📖 X-Ray 插件 - KOReader
 
-Transform your reading experience with AI-powered book analysis, just like Amazon Kindle X-Ray!
+利用 AI 在 KOReader 上实现 Amazon Kindle X-Ray 功能，为任何 EPUB 书籍生成角色、地点、主题和时间线分析。
 
-![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)
-![Platform](https://img.shields.io/badge/platform-KOReader-green.svg)
-![License](https://img.shields.io/badge/license-MIT-yellow.svg)
+> Fork 自 [koreader-xray-plugin](https://github.com/0zd3m1r/koreader-xray-plugin)，进行了架构重写：原版仅发送书名给 AI（导致幻觉和剧透），本 Fork **发送实际书籍文本**，确保分析准确。
 
----
-
-## 🎯 What is X-Ray Plugin?
-
-X-Ray Plugin brings Amazon Kindle's beloved X-Ray feature to KOReader. Using advanced AI technology (Google Gemini or ChatGPT), it automatically extracts and organizes content while ensuring a spoiler-free experience:
-
-    👥 Characters - Names, descriptions, roles, occupations
-
-    📍 Locations - Important places and their significance
-
-    🛡️ Spoiler Free - Intelligent summaries that avoid revealing major plot twists
-
-    ⏱️ Timeline - Key events in chronological order
-
-    📜 Historical Figures - Real people mentioned in the book
-
-    🎨 Themes - Main themes and ideas
-
-    📝 Notes - Your personal character notes
-
-All data is cached locally for offline use and works without internet after the initial fetch!
-
-
+![GitHub Release](https://img.shields.io/github/v/release/Cusanity/xray.koplugin?label=版本)
+![Platform](https://img.shields.io/badge/平台-KOReader-green.svg)
+![License](https://img.shields.io/badge/许可-MIT-yellow.svg)
 
 ---
 
-## ✨ Key Features
+## 快速开始
 
-### 🤖 AI Integration
+### 1. 安装插件
 
-- **Google Gemini 2.5 Flash** (FREE, recommended)
-- **Google Gemini 2.5 Pro** (optional, more detailed)
-- **ChatGPT (GPT-3.5 Turbo)** (paid, OpenAI)
-- Smart JSON parsing with error recovery
-- Language-aware prompts (Turkish/English/Português etc.)
-
-### 👥 Character Management
-
-- Automatic character extraction from book title
-- Detailed profiles: name, description, role, gender, occupation
-- **Character search** with fuzzy matching
-- **Chapter analysis**: See which characters appear in current chapter
-- **Personal notes**: Add your own notes for each character
-- **📊 Smart Menu Counters**: See live counts (e.g., "Characters (12)")
-
-### 📖 Advanced Analysis
-
-- **Timeline**: Important events in chronological order
-- **Historical Figures**: Real people mentioned (with biographies!)
-- **Locations**: Important places and their significance
-- **Themes**: Main themes extracted by AI
-- **Spoiler-Free**: AI is trained to avoid spoilers
-- **🔍 Enhanced Historical Analysis**: Detects direct and indirect historical references
-
-### 💾 Cache System
-
-- **Unlimited validity**: Cache never expires
-- **Offline usage**: Internet only needed for initial fetch
-- **Per-book storage**: Each book has its own cache
-- **Auto-load**: Cache loads automatically when opening a book
-- **🌍 Multi-Language Support**: Interface + AI prompts
-
----
-
-## 🚀 Quick Start
-
-### 1. Installation
-
-```bash
-# Copy plugin to KOReader plugins directory
-cp -r xray.koplugin ~/.config/koreader/plugins/
-
-# Restart KOReader
-```
-
-### 2. Get a Free API Key
-
-**Google Gemini (Recommended - FREE)**
-1. Go to https://makersuite.google.com/app/apikey
-2. Sign in with Google account
-3. Click "Create API Key"
-4. Copy the key (starts with `AIza...`)
-
-**Alternative: ChatGPT (Paid)**
-1. Go to https://platform.openai.com/api-keys
-2. Create API key (starts with `sk-...`)
-
-### 3. Configure Plugin
-
-1. Open any book in KOReader
-2. Go to **Menu → X-Ray → AI Settings**
-3. Select **Google Gemini API Key**
-4. Paste your API key
-5. Done! ✅
-
-### 4. Fetch Your First Book
-
-1. Go to **Menu → X-Ray → Fetch AI Data** (veya "AI ile Bilgi Çek")
-2. Wait 10-15 seconds
-3. Done! All data is now cached offline ✨
-
----
-
-## 📱 Usage
-
-### Quick Access
-
-- **Alt + X**: Quick X-Ray menu
-- **Menu → X-Ray**: Full menu with all features
-- **Gestures → X-Ray & All features**
-
-### Main Features
-
-#### 👥 Characters
-```
-Menu → X-Ray → Characters
-```
-- View all characters with descriptions
-- Click any character for detailed info
-- Search for specific characters
-
-#### 📖 This Chapter
-```
-Menu → X-Ray → Characters in This Chapter
-```
-- See which characters appear in current chapter
-- Shows occurrence frequency (e.g., "John (5x)")
-- Quick access to character details
-
-#### ⏱️ Timeline
-```
-Menu → X-Ray → Timeline
-```
-- Important events in order
-- Chapter references
-- Characters involved in each event
-
-#### 📜 Historical Figures
-```
-Menu → X-Ray → Historical Figures
-```
-- Real people mentioned in the book
-- Biographies and dates
-- Context in the book
-
-#### 📝 Character Notes
-```
-Menu → X-Ray → My Character Notes
-```
-- Add personal notes for each character
-- Edit or delete existing notes
-- Notes saved per book
-
-### Advanced Features
-
-#### 🌍 Change Language
-```
-Menu → X-Ray → Language / Dil
-```
-- Switch between languages
-- Applies immediately (menu refreshes on next open)
-- AI will fetch data in selected language
-
-#### 🗑️ Clear Cache
-```
-Menu → X-Ray → Clear Cache
-```
-- Delete all cached data for current book
-- Useful for re-fetching updated data
-- Requires confirmation dialog
-
----
-
-![photo_2025-10-30_13-38-30](https://github.com/user-attachments/assets/48e4b012-f0c1-43b0-9380-c5ca69c8cb6d)
-![photo_2025-10-30_13-38-28](https://github.com/user-attachments/assets/60f292d4-acc3-42ef-8ae0-9a501719dd76)
-![photo_2025-10-30_13-38-25](https://github.com/user-attachments/assets/2290087a-81e4-404b-bf6a-7fd8aa6f55bd)
-![photo_2025-10-30_13-38-37](https://github.com/user-attachments/assets/0b451a75-966a-432d-93ff-83649f965c40)
-![photo_2025-10-30_13-38-42](https://github.com/user-attachments/assets/8bf8a6cd-aa83-4f20-a096-924dd4ccd095)
-![photo_2025-10-30_13-38-40](https://github.com/user-attachments/assets/c7924bf7-6775-46bb-ab04-c96cc1712b75)
-![photo_2025-10-30_13-38-35](https://github.com/user-attachments/assets/345e805f-f34d-4051-8c0a-22c18a1f9825)
-![photo_2025-10-30_13-38-33](https://github.com/user-attachments/assets/8c8aabd1-e8da-4690-a55d-d20fafc11484)
-
-
-## 🛠️ Configuration
-
-### config.lua (Optional)
-
-Create `xray.koplugin/config.lua` for permanent settings:
-
-```lua
-return {
-    -- API Keys
-    gemini_api_key = "AIzaSy...",
-    chatgpt_api_key = "sk-...",
-    
-    -- Default AI Provider
-    default_provider = "gemini",  -- or "chatgpt"
-    
-    -- Gemini Model Selection
-    gemini_model = "gemini-2.5-flash",  -- or "gemini-2.5-pro"
-    
-    -- Settings
-    settings = {
-        auto_load_cache = true,
-        show_gender_icons = true,
-    }
-}
-```
-
-### File Locations
+从 [Releases](https://github.com/Cusanity/xray.koplugin/releases/latest) 下载 `xray.koplugin-v*.zip`，解压到 `/koreader/plugins/`，解压后结构如下：
 
 ```
-~/.config/koreader/
-├── cache/xray/                 # Book data cache
-│   └── book_hash_*.json
-├── settings/xray/              # Plugin settings
-│   ├── language.txt            # Selected language
-│   └── notes/                  # Character notes
-│       └── book_hash_*.json
-└── plugins/xray.koplugin/      # Plugin files
+/koreader/plugins/
+└── xray.koplugin/
+    ├── _meta.lua
     ├── main.lua
-    ├── localization.lua
+    ├── generator.lua
     ├── aihelper.lua
     ├── cachemanager.lua
     ├── chapteranalyzer.lua
     ├── characternotes.lua
-    └── config.lua (optional)
+    ├── localization_xray.lua
+    ├── sync.lua
+    ├── xray_receiver.lua
+    ├── config.lua.example
+    ├── languages/
+    │   ├── en.po
+    │   ├── zh.po
+    │   └── zh_TW.po
+    └── prompts/
+        ├── zh.json
+        └── zh.lua
 ```
+
+重启 KOReader。
+
+### 2. 在电脑上生成 X-Ray 数据
+
+从源码运行 GUI，分析 EPUB 后通过 [Wi-Fi 推送](#从pc接收) 或 [WebDAV](#webdav-同步) 传到阅读器。
+
+### 3. 在阅读器上使用
+
+- **菜单 → X-Ray** — 查看角色 / 地点 / 主题 / 时间线（只显示已读内容，零剧透）
+- **长按文字 → X-Ray** — 即时查看该角色 / 地点信息
 
 ---
 
-## 💡 Tips & Tricks
+## 电脑端生成器（GUI）
 
-### For Best Results
+在电脑上预生成整本书的 X-Ray 数据（含事件精确定位 `xref`、原文锚点 `anchor`、时间线序号等）。
 
-1. **Use original book titles**: "War and Peace" works better than "wp.epub"
-2. **Include author name**: Helps AI identify the correct book
-3. **Gemini Flash is great**: Free, fast, and accurate for most books
-4. **Cache once, use forever**: No need to re-fetch unless you want updates
+### 安装
 
-### Character Search Tips
+```bash
+git clone https://github.com/Cusanity/xray.koplugin.git
+cd xray.koplugin
+python -m venv .venv
+# Windows Git Bash:
+source .venv/Scripts/activate
+pip install -r requirements.txt
+python generator_gui.py
+```
 
-- Search works with partial names: "john" finds "John Smith"
-- Case-insensitive: "JOHN" = "john" = "John"
-- First name search: "John" finds "John Smith"
+Linux/macOS 激活虚拟环境：
 
-### Historical Figures Detection
+```bash
+source .venv/bin/activate
+```
 
-The plugin intelligently detects:
-- **Direct references**: "Napoleon Bonaparte appears in Chapter 5"
-- **Indirect references**: "The 1860s nihilist movement" → Adds key figures
-- **Philosophical references**: Characters discussing "Hegel" → Adds Hegel
-- **Period atmosphere**: Important figures of the book's era
+Windows PowerShell 激活虚拟环境：
 
-Examples:
-- **"Demons" (Dostoevsky)**: Finds Sergei Nechayev, Alexander Herzen, Vissarion Belinsky
-- **"War and Peace"**: Finds Napoleon, Kutuzov, Alexander I
-- **"1984"**: No historical figures (modern dystopia)
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+### 配置
+
+首次运行后，在 **Configuration** 标签页填写 API 密钥和 Calibre 书库路径，点「Save .env」保存（也可提前复制 `.env.example` 为 `.env` 手动填入）：
+
+```env
+XRAY_API_BASE=http://localhost:8080/v1
+XRAY_API_KEY=your-api-key
+XRAY_MODEL=gemini-2.5-flash-lite
+CALIBRE_LIBRARY=/path/to/your/Calibre Library
+```
+
+> 将 `.env` 放在 `xray.koplugin/` 根目录，API 密钥即可持久化。
+
+### 标签页说明
+
+| 标签页 | 功能 |
+|--------|------|
+| **Configuration** | 选择提供商（OpenAI 兼容 / Claude / Groq / Gemini / DeepSeek）、在线获取模型列表、填写 API 密钥、设置 Calibre 路径与温度，一键读写 `.env`；通过**重试/回退链**配置多模型串联（失败时自动切换），「生成 X-Ray」按钮旁有 **ⓘ** 图标，悬停即显示当前模型链摘要 |
+| **Books** | 从 Calibre 书库扫描书籍（支持自动检测书库位置），支持筛选、多选、手动添加 EPUB；**刷新全部** / **刷新所选** 更新 WebDAV 同步状态；**从 WebDAV 删除所选** 一键删除远程文件夹；清理残留文件夹；开始 / 停止分析；每本书显示 X-Ray 进度（未开始 / 部分 % / 完成）及 WebDAV 同步状态 |
+| **Progress** | 批量进度条、分块计数、实时角色 / 地点 / 事件统计、流式日志控制台；批处理完成后自动弹出**令牌用量与费用摘要**（价格实时从 [LiteLLM 社区目录](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 获取） |
+| **Sync** | Wi-Fi 推送到设备（从PC接收）或上传 / 下载 / 删除 WebDAV 服务器上的 X-Ray 数据 |
+| **Results** | 以树状结构浏览某本书的角色、地点、时间线、主题与摘要 |
+
+> ℹ️ 「停止」会在完成当前书籍后再停止（分块并行执行，不能中途安全取消）。
 
 ---
 
-## 📚 Example Use Cases
+## 传输到阅读器
 
-### Classic Literature: "Crime and Punishment"
+生成完 `xray_data.json` 后，任选一种方式传到阅读器：
 
-```
-✓ Characters (15)
-  - Raskolnikov (protagonist, student)
-  - Sonya (poor girl, religious)
-  - Porfiry (investigator)
-  
-✓ Timeline (8 events)
-  - Chapter 1: Raskolnikov plans the crime
-  - Chapter 2: The murder takes place
-  - Chapter 5: First interrogation
-  
-✓ Historical Context
-  - 1860s Russian nihilism movement
-  - St. Petersburg urban poverty
-```
+### 从PC接收（Wi-Fi 直推）
 
-### Historical Fiction: "War and Peace"
+无需数据线或云盘，阅读器与电脑在同一 Wi-Fi 下即可：
+
+1. **阅读器**：**菜单 → X-Ray → 从PC接收**，记下显示的设备 IP（默认端口 8763）。
+2. **GUI**：在 **Sync** 标签页填入设备 IP，点「立即推送」或勾选生成后自动推送。
+
+### WebDAV 同步
+
+通过 **菜单 → X-Ray → 云端同步** 上传/下载，实现多设备共享。远端目录结构：
 
 ```
-✓ Characters (100+) organized
-✓ Historical Figures (20+)
-  - Napoleon Bonaparte (1769-1821)
-  - Mikhail Kutuzov (1745-1813)
-  - Alexander I of Russia
-  
-✓ Locations (15+)
-  - Moscow, Petersburg, Austerlitz
-  
-✓ Timeline
-  - Battle of Austerlitz (1805)
-  - French invasion of Russia (1812)
-  - Battle of Borodino (1812)
+<WebDAV 根目录>/
+└── 书籍.epub.sdr/
+    └── xray_analysis/
+        └── xray_data.json
 ```
 
-### Modern Fiction: "The Great Gatsby"
-
-```
-✓ Characters (12)
-  - Jay Gatsby (mysterious millionaire)
-  - Nick Carraway (narrator)
-  - Daisy Buchanan
-  
-✓ Themes
-  - American Dream
-  - Wealth and class
-  - Love and obsession
-  
-✓ Locations
-  - West Egg, East Egg, New York City
-```
+在 **Sync** 标签页配置 WebDAV 地址与凭据，一键上传；阅读器上点「下载」同步。Books 标签页提供**上传所选 / 下载所选 / 从 WebDAV 删除所选**快捷按钮，以及每行的 WebDAV 同步状态列（已同步 / 未上传 / 有差异 / 仅服务器上），可单独刷新所选书籍状态。
 
 ---
 
-## 🌍 Supported Languages
-
-### Interface Languages
-- 🇹🇷 **Turkish** (Türkçe)
-- 🇬🇧 **English**
-- 🇵🇹 **Brazilian Português**
-
-### AI Data Languages
-AI automatically provides data in the selected interface language:
-- Turkish interface → AI responses in Turkish
-- English interface → AI responses in English
-- Brazilian Português interface → AI responses in Português
-
-### Adding New Languages
-
-1. Edit `main.lua`
-2. Add new language code (e.g., `de` for German)
-3. Translate all strings in `de.po = { ... }`
-4. Add prompt templates in `de.lua`
-5. Done! 🎉
-
----
-
-## 🔧 Technical Details
-
-### Architecture
+## 项目结构
 
 ```
-main.lua           → Plugin core, menu management
-localization.lua   → Multi-language support
-aihelper.lua       → AI integration (Gemini/ChatGPT)
-cachemanager.lua   → Cache storage and retrieval
-chapteranalyzer.lua → Chapter text analysis
-characternotes.lua → Personal notes management
+xray.koplugin/
+├── main.lua              # 插件 UI（菜单、X-Ray 查看器、文本选中处理）
+├── generator.lua         # 设备端 AI 生成器
+├── aihelper.lua          # AI API 客户端（多提供商）
+├── cachemanager.lua      # 渐进式 JSON 缓存管理
+├── chapteranalyzer.lua   # 设备端 EPUB 文本提取
+├── characternotes.lua    # 角色笔记
+├── sync.lua              # WebDAV 上传/下载
+├── xray_receiver.lua     # 接收电脑推送的 X-Ray 数据
+├── localization_xray.lua # 国际化
+├── languages/            # 翻译文件（.po）
+├── prompts/zh.json       # AI 提示词（单一来源，设备端与 PC 端共用）
+├── generator_gui.py      # 电脑端 GUI 源码
+├── gui_i18n.py           # GUI 国际化
+├── .env.example          # API 密钥配置模板
+└── requirements.txt  # GUI Python 依赖（含 AI provider SDK）
 ```
 
-### AI Models
-
-| Model | Cost | Speed | Quality | Token Limit |
-|-------|------|-------|---------|-------------|
-| Gemini 2.5 Flash | FREE | Fast | Good | 8K |
-| Gemini 2.5 Pro | FREE | Medium | Excellent | 8K |
-| GPT-3.5 Turbo | Paid | Fast | Good | 4K |
-
-### Cache Format
+### 数据格式
 
 ```json
 {
-  "book_title": "Crime and Punishment",
-  "author": "Fyodor Dostoevsky",
-  "cached_at": 1735563600,
-  "characters": [...],
+  "book_title": "...",
+  "author": "...",
+  "summary": "...",
+  "characters": [
+    {
+      "name": "角色名",
+      "descriptions": [
+        { "percent": 10, "text": "早期描述..." },
+        { "percent": 50, "text": "更新后的描述..." }
+      ],
+      "events": [
+        { "event": "...", "xref": { "spine": 3, "offset": 1200 }, "anchor": "原文引用" }
+      ]
+    }
+  ],
   "locations": [...],
-  "timeline": [...],
-  "historical_figures": [...],
   "themes": [...],
-  "summary": "..."
+  "timeline": [
+    { "sequence": 1, "event": "...", "character": "...", "xref": {...}, "anchor": "..." }
+  ],
+  "analysis_progress": 100
 }
 ```
 
 ---
 
-## ❓ FAQ
+## 常见问题
 
-**Q: Is the API key safe?**
-A: Yes, it's stored locally in KOReader. Never shared.
+**Q: 离线能用吗？**
+A: 在电脑上分析需要网络；数据传到阅读器后，阅读与查看完全离线可用。
 
-**Q: How much does it cost?**
-A: Google Gemini has a generous free tier. Most users never pay.
+**Q: 分析中断了？**
+A: 下次运行时自动从上次位置续传。
 
-**Q: Does it work offline?**
-A: Yes! After initial fetch, everything is cached locally.
+**Q: 跳转章节会剧透吗？**
+A: 不会。插件只加载不超过当前阅读进度的数据。
 
-**Q: Can I use it on multiple devices?**
-A: Yes, but cache is per-device. Fetch once per device.
-
-**Q: Will it give spoilers?**
-A: No! AI is explicitly instructed to avoid spoilers.
-
-**Q: What if the book is not recognized?**
-A: AI will try its best. You can also manually edit cache files.
-
-**Q: Can I edit the data?**
-A: Yes, cache files are JSON. Edit with any text editor.
-
-**Q: Does it support graphic novels?**
-A: Not yet. Text-based books only.
-
-**Q: What about DRM-protected books?**
-A: Plugin works with any book KOReader can open.
-
-**Q: Can I contribute?**
-A: Yes! See Contributing section below.
+**Q: 支持什么语言？**
+A: 目前针对**中文**书籍优化（提示词、角色名归一化、繁简转换均为中文适配）。
 
 ---
 
-## 🐛 Troubleshooting
+## 贡献
 
-### "API key not set"
-→ Go to Menu → X-Ray → AI Settings → Set API key
+欢迎 PR 和 Issue！
 
-### "Failed to fetch AI data"
-- Check internet connection
-- Verify API key is correct (copy-paste from provider)
-- Try clearing and re-entering API key
-- Check API quota (Gemini free tier has limits)
 
-### "No characters found in chapter"
-- Make sure you're in a chapter (not title page)
-- Try a different chapter
-- Characters must be in main character list first
-
-### Cache not loading
-- Check file permissions in ~/.config/koreader/cache/xray/
-- Try clearing cache and re-fetching
-
-### Language not changing
-- Language change requires menu reopen
-- Check ~/.config/koreader/settings/xray/language.txt
+- **Bug 报告**：附上 KOReader 版本和 `crash.log`
+- **功能建议**：描述使用场景
 
 ---
 
-## 🎯 Roadmap
+## 截图
 
-### Planned Features
-- [ ] More AI providers (Claude, local LLMs)
-- [ ] Character relationship graph
-- [ ] Custom AI prompts
-- [ ] Quote extraction
-- [ ] Series tracking (Book 1, 2, 3...)
+### PC 端 GUI
 
-### Under Consideration
-- [ ] Character appearance highlighting in text
----
+#### 配置标签页（Configuration）
 
-## 🤝 Contributing
+提供商选择（OpenAI 兼容 / Claude / Groq / Gemini / DeepSeek）、在线获取模型列表、API 密钥填写、Calibre 书库路径、温度设置；底部**重试/回退链**可配置多模型串联，失败时自动切换到下一个。
 
-Contributions are welcome! Here's how:
+![配置标签页](docs/screenshots/config-tab.png)
 
-### Bug Reports
-1. Open an issue on GitHub
-2. Include KOReader version and e-Reader
-3. Include error message (crash.log)
-4. Describe steps to reproduce
+#### 书库标签页（Books）
 
-### Feature Requests
-1. Open an issue with "Feature Request" tag
-2. Describe the feature
-3. Explain use case
+显示从 Calibre 扫描到的所有 EPUB，每行标注 X-Ray 分析进度（未开始 / 部分 N% / 完成）及 WebDAV 同步状态（已同步 / 未上传 / 有差异 / 仅服务器上）。
 
-### Code Contributions
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Test thoroughly
-5. Submit pull request
+![书库标签页](docs/screenshots/books-tab.png)
 
-### Translations
-1. Copy Translations\ `en.lua` and `en.po`
-2. Add your language code
-3. Translate all strings
-4. Submit pull request
+#### 进度标签页（Progress）
+
+批量分析时显示整体进度条、当前分块计数及实时角色/地点/事件统计；流式日志控制台输出每个分块的 AI 调用详情。
+
+![进度标签页](docs/screenshots/progress-tab.png)
+
+#### 令牌用量与费用摘要
+
+批处理完成后自动弹出，显示各模型的输入/输出令牌数、字符数及预估费用（价格实时从 [LiteLLM 社区目录](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 获取）。
+
+![令牌用量与费用摘要](docs/screenshots/token-usage-dialog.png)
+
+#### 同步标签页（Sync）
+
+配置 WebDAV 服务器地址与凭据，一键上传/下载；或输入设备 IP 通过 Wi-Fi 直接推送 `xray_data.json` 到阅读器。
+
+![同步标签页](docs/screenshots/sync-tab.png)
 
 ---
 
-## 📜 License
+### KOReader 设备端
 
-MIT License - See LICENSE file for details
+#### X-Ray 主菜单
+
+**菜单 → X-Ray** 进入，列出角色、章节角色、时间线、地点、主题等所有条目数（仅统计已读部分）。
+
+![X-Ray 主菜单](docs/screenshots/koreader-main-menu.png)
+
+#### 角色列表
+
+按重要性排序，只显示在当前阅读进度内出现过的角色，顶部有搜索入口。
+
+![角色列表](docs/screenshots/koreader-characters.png)
+
+#### 地点列表
+
+书中出现的地点及其描述，仅显示已读范围内的地点。
+
+![地点列表](docs/screenshots/koreader-locations.png)
+
+#### 时间线
+
+全书已读事件按发生顺序排列，格式为「人物 · 事件」，点击可跳转到原文锚点。
+
+![时间线](docs/screenshots/koreader-timeline.png)
+
+#### 长按文字 → X-Ray 上下文菜单（角色）
+
+长按书中文字后，若匹配到已知角色，菜单中出现「X-Ray」选项。
+
+![长按角色上下文菜单](docs/screenshots/koreader-context-menu-character.png)
+
+#### 长按文字 → X-Ray 上下文菜单（地点）
+
+长按书中文字后，若匹配到已知地点，菜单中出现「X-Ray」选项。
+
+![长按地点上下文菜单](docs/screenshots/koreader-context-menu-location.png)
 
 ---
 
-## 🙏 Acknowledgments
+## 许可
 
-- **KOReader Team** - For the amazing e-reader platform
-- **Testers** - For valuable feedback
-- **You** - For using X-Ray Plugin! 📖✨
-
----
-
-## 📮 Support
-
-- **GitHub Issues**: Report bugs and request features
----
-
-## 🌟 Star History
-
-If you find this plugin useful, please star the repository! ⭐
-
----
-
-**Made with ❤️ for book lovers everywhere**
-
-*Happy Reading! 📖✨*
+MIT License — 详见 [LICENSE](LICENSE)

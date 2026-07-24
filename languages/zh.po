@@ -1,0 +1,991 @@
+# Simplified Chinese translation for X-Ray Plugin
+# Copyright (C) 2025
+# This file is distributed under the same license as the X-Ray package.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: X-Ray 1.1.0\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-11-17 12:00+0000\n"
+"PO-Revision-Date: 2026-01-03 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Simplified Chinese\n"
+"Language: zh\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+# ==============================
+# MENU ITEMS
+# ==============================
+
+msgid "menu_xray"
+msgstr "X-Ray"
+
+msgid "menu_characters"
+msgstr "人物"
+
+msgid "menu_chapter_characters"
+msgstr "本章人物"
+
+msgid "menu_character_notes"
+msgstr "我的人物笔记"
+
+msgid "menu_timeline"
+msgstr "时间线"
+
+msgid "menu_historical_figures"
+msgstr "历史人物"
+
+msgid "menu_locations"
+msgstr "地点"
+
+msgid "menu_author_info"
+msgstr "作者简介"
+
+msgid "menu_summary"
+msgstr "内容概要"
+
+msgid "menu_themes"
+msgstr "主题"
+
+msgid "menu_fetch_ai"
+msgstr "获取AI数据"
+
+msgid "menu_ai_settings"
+msgstr "AI设置"
+
+msgid "menu_clear_xray"
+msgstr "清理 X-Ray 数据"
+
+
+msgid "menu_language"
+msgstr "语言"
+
+msgid "menu_view_options"
+msgstr "显示选项"
+
+msgid "menu_about"
+msgstr "关于"
+
+msgid "menu_cloud_sync"
+msgstr "云端同步"
+
+msgid "menu_receive_from_pc"
+msgstr "从PC接收"
+
+msgid "receiver_stopped"
+msgstr "已停止接收"
+
+msgid "receiver_waiting_fmt"
+msgstr "等待PC连接，端口 %d。\n\n设备IP：%s\n\n在PC上运行：\n  python generator.py"
+
+msgid "receiver_start_failed"
+msgstr "无法启动接收器：%s"
+
+msgid "receiver_data_received"
+msgstr "已从PC接收 X-Ray 数据。\n正在重新加载…"
+
+msgid "receiver_data_loaded"
+msgstr "X-Ray 数据已加载。"
+
+msgid "receiver_write_failed"
+msgstr "接收失败：%s"
+
+msgid "error_no_book_open"
+msgstr "错误：当前未打开书籍"
+
+msgid "ai_preparing"
+msgstr "AI 正在准备分析..."
+
+msgid "ai_analysis_cancelled"
+msgstr "AI 分析已取消"
+
+msgid "btn_stop_bilingual"
+msgstr "停止 (Stop)"
+
+msgid "model_config_changed"
+msgstr "上次使用的模型配置已变更，请重新选择"
+
+msgid "menu_manage_server"
+msgstr "管理服务器"
+
+msgid "menu_upload_xray"
+msgstr "上传 X-Ray 数据"
+
+msgid "menu_download_xray"
+msgstr "下载 X-Ray 数据"
+
+msgid "upload_warn"
+msgstr "这将用本地 X-Ray 数据覆盖服务器上的文件。\n确定继续吗？"
+
+msgid "upload"
+msgstr "上传"
+
+msgid "uploading"
+msgstr "正在上传..."
+
+msgid "download_warn"
+msgstr "此操作将从云端下载 X-Ray 数据。\n\n注意：这将覆盖现有的本地 X-Ray 数据。\n\n确定继续吗？"
+
+msgid "download"
+msgstr "下载"
+
+msgid "downloading"
+msgstr "正在下载..."
+
+msgid "server_saved"
+msgstr "服务器设置已保存"
+
+msgid "cloud_storage"
+msgstr "云端存储"
+
+msgid "upload_complete"
+msgstr "上传完成\n成功: %d, 失败: %d"
+
+msgid "download_complete"
+msgstr "下载完成\n成功: %d, 失败: %d, 已跳过: %d\n数据已重新加载。"
+
+msgid "mention_count"
+msgstr "提及次数: %d"
+
+msgid "character_info"
+msgstr "人物信息"
+
+msgid "location_info"
+msgstr "地点信息"
+
+msgid "theme_info"
+msgstr "主题信息"
+
+msgid "xray_info"
+msgstr "X-Ray信息"
+
+msgid "view_details"
+msgstr "查看详情"
+
+msgid "close"
+msgstr "关闭"
+
+msgid "view_events"
+msgstr "查看事件"
+
+msgid "go_to_location"
+msgstr "跳转至位置"
+
+# ==============================
+# AI SETTINGS & PROVIDERS
+# ==============================
+
+msgid "menu_gemini_key"
+msgstr "Google Gemini API密钥"
+
+msgid "menu_gemini_model"
+msgstr "选择Gemini模型"
+
+msgid "menu_chatgpt_key"
+msgstr "ChatGPT API密钥"
+
+msgid "menu_provider_select"
+msgstr "选择AI服务商"
+
+msgid "gemini_model_title"
+msgstr "选择Gemini模型"
+
+msgid "gemini_model_flash"
+msgstr "最快速 + 免费"
+
+msgid "gemini_model_pro"
+msgstr "均衡 + 强大"
+
+msgid "gemini_model_flash_15"
+msgstr "快速 + 高效"
+
+msgid "unknown_model"
+msgstr "未知模型。"
+
+msgid "model_selected"
+msgstr "模型已选择"
+
+msgid "gemini_model_flash_info"
+msgstr "模型：Gemini 2.5 Flash\n\n已选择最快速的免费模型！\n\n特点：\n• 超快响应\n• 免费使用"
+
+msgid "gemini_model_pro_info"
+msgstr "模型：Gemini 2.5 Pro\n\n已选择强大模型！\n\n特点：\n• 高质量输出\n• 均衡速度\n• 复杂分析"
+
+msgid "gemini_model_3_pro_info"
+msgstr "模型：Gemini 3 Pro\n\n已选择最新最强大的模型！"
+
+msgid "gemini_model_flash_lite_info"
+msgstr "已切换到 Gemini Flash Lite"
+
+
+# ==============================
+# STATUS MESSAGES
+# ==============================
+
+msgid "xray_mode_active"
+msgstr "已启用"
+
+msgid "xray_mode_inactive"
+msgstr "未启用"
+
+msgid "events"
+msgstr "事件"
+
+# ==============================
+# INFO MESSAGES
+# ==============================
+
+msgid "no_character_data"
+msgstr "暂无人物数据。请先使用\"获取AI数据\"功能。"
+
+msgid "no_char_data_fetch"
+msgstr "暂无人物信息。\n\n请先从AI获取数据。"
+
+msgid "no_location_data"
+msgstr "暂无地点数据。请先使用\"获取AI数据\"功能。"
+
+msgid "no_author_data"
+msgstr "暂无作者信息。请先使用\"获取AI数据\"功能。"
+
+msgid "no_summary_data"
+msgstr "暂无概要数据。请先使用\"获取AI数据\"功能。"
+
+msgid "no_theme_data"
+msgstr "暂无主题数据。请先使用\"获取AI数据\"功能。"
+
+msgid "no_timeline_data"
+msgstr "暂无时间线数据。\n\n请先使用\"获取AI数据\"功能。\n\nAI将按时间顺序展示关键事件。"
+
+msgid "no_historical_data"
+msgstr "暂无历史人物数据。\n\n请先使用\"获取AI数据\"功能。\n\nAI将检测书中提及的真实历史人物。"
+
+# ==============================
+# AUTO-LOAD & CACHE
+# ==============================
+
+msgid "xray_ready"
+msgstr "X-Ray已就绪并启用！"
+
+msgid "characters_loaded"
+msgstr "位人物"
+
+msgid "locations_loaded"
+msgstr "个地点"
+
+msgid "themes_loaded"
+msgstr "个主题"
+
+msgid "no_cache_found"
+msgstr "未找到缓存"
+
+msgid "checking_cache"
+msgstr "已从缓存加载！"
+
+msgid "cache_verify"
+msgstr "此书已有数据。\n如需重新获取，请先清除缓存。\n\n路径：菜单 → X-Ray → 清除缓存"
+
+msgid "cache_saved"
+msgstr "已保存至缓存！"
+
+msgid "cache_save_failed"
+msgstr "缓存保存失败"
+
+msgid "cache_clear_confirm"
+msgstr "确认清除缓存\n\n清除缓存后：\n\n• 所有人物信息将被删除\n• 时间线将被删除\n• 历史人物将被删除\n• 地点和主题信息将被删除\n• 作者信息将被删除\n\n您需要重新从AI获取数据。\n\n确定要清除缓存吗？"
+
+msgid "yes_clear"
+msgstr "确定清除"
+
+msgid "cancel"
+msgstr "取消"
+
+msgid "cache_cleared"
+msgstr "缓存已清除！\n\n现在可以获取新数据：\n菜单 → X-Ray → 获取AI数据"
+
+msgid "cache_not_found"
+msgstr "未找到缓存或无法清除"
+
+# ==============================
+# CHARACTER DETAILS
+# ==============================
+
+msgid "character_name"
+msgstr "人物："
+
+msgid "description"
+msgstr "描述："
+
+msgid "role"
+msgstr "角色："
+
+msgid "gender"
+msgstr "性别："
+
+msgid "occupation"
+msgstr "职业："
+
+msgid "not_specified"
+msgstr "未指定"
+
+msgid "no_description"
+msgstr "暂无描述"
+
+msgid "unnamed_character"
+msgstr "未命名人物"
+
+msgid "unknown_character"
+msgstr "未知人物"
+
+msgid "gender_male"
+msgstr "男"
+
+msgid "gender_female"
+msgstr "女"
+
+# ==============================
+# AI FETCH & STATUS
+# ==============================
+
+msgid "book_title"
+msgstr "书名："
+
+msgid "characters_count"
+msgstr "人物："
+
+msgid "locations_count"
+msgstr "地点："
+
+msgid "themes_count"
+msgstr "主题："
+
+msgid "events_count"
+msgstr "事件："
+
+msgid "historical_count"
+msgstr "历史人物："
+
+msgid "cache_age"
+msgstr "缓存时间："
+
+msgid "days_old"
+msgstr "天"
+
+msgid "unlimited_valid"
+msgstr "永久有效！"
+
+msgid "fetch_new_data"
+msgstr "如需获取新数据：\n菜单 → X-Ray → 清除缓存"
+
+msgid "no_api_key"
+msgstr "未设置AI API密钥！\n\n请在以下位置输入API密钥：\n菜单 → X-Ray → AI设置"
+
+msgid "fetching_ai"
+msgstr "正在从AI获取数据...\n\n"
+
+msgid "fetching_model"
+msgstr "模型："
+
+msgid "fetching_wait"
+msgstr "⏳ 请稍候...\n此过程可能需要10-30秒。"
+
+msgid "dont_touch"
+msgstr "请勿触摸屏幕。"
+
+msgid "ai_fetch_failed"
+msgstr "从AI获取数据失败！\n\n可能的原因：\n• API密钥无效\n• 无网络连接\n• API请求次数超限"
+
+msgid "ai_fetch_complete"
+msgstr ""
+"成功从 %s 获取！\n"
+"\n"
+"%s\n"
+"作者：%s\n"
+"\n"
+"%d 位人物\n"
+"%d 个地点\n"
+"%d 个主题\n"
+"%d 个事件\n"
+"%d 位历史人物\n"
+"\n"
+"%s"
+
+# ==============================
+# X-RAY MODE & SEARCH
+# ==============================
+
+msgid "xray_mode_no_data"
+msgstr "请先获取X-Ray模式数据！\n\n菜单 → X-Ray → 获取AI数据"
+
+msgid "xray_mode_enabled"
+msgstr "X-Ray模式已启用！\n\n注意：文本选择功能\n目前已禁用。\n\n如需搜索人物：\n菜单 → X-Ray → 人物 → 搜索"
+
+msgid "xray_mode_disabled"
+msgstr "X-Ray模式已禁用"
+
+msgid "search_character"
+msgstr "搜索人物..."
+
+msgid "search_character_title"
+msgstr "搜索人物"
+
+msgid "search_hint"
+msgstr "输入名字（如：贾宝玉）"
+
+msgid "search_button"
+msgstr "搜索"
+
+msgid "character_not_found"
+msgstr "未找到人物：%s\n\n提示：输入名字的一部分"
+
+# ==============================
+# TIMELINE & CHAPTER
+# ==============================
+
+msgid "timeline_event"
+msgstr "事件 #%d"
+
+msgid "chapter"
+msgstr "章节："
+
+msgid "characters_involved"
+msgstr "相关人物："
+
+msgid "importance"
+msgstr "重要性："
+
+msgid "analyzing_chapter"
+msgstr "正在分析章节...\n\n请稍候"
+
+msgid "chapter_text_error"
+msgstr "无法获取章节文本"
+
+msgid "no_characters_in_chapter"
+msgstr "本章未找到人物。\n\n章节：%s"
+
+msgid "this_chapter"
+msgstr "本章"
+
+msgid "chapter_chars_title"
+msgstr "人物"
+
+# ==============================
+# CHARACTER NOTES
+# ==============================
+
+msgid "character_notes_title"
+msgstr "人物笔记（%d条笔记）"
+
+msgid "add_note"
+msgstr "添加笔记"
+
+msgid "note_saved"
+msgstr "笔记已保存！\n\n%s"
+
+msgid "note_deleted"
+msgstr "笔记已删除！\n\n%s"
+
+msgid "add_note_title"
+msgstr "为 %s 添加笔记"
+
+msgid "note_hint"
+msgstr "您对该人物的笔记..."
+
+msgid "save"
+msgstr "保存"
+
+msgid "delete"
+msgstr "删除"
+
+# ==============================
+# QUICK MENU
+# ==============================
+
+msgid "quick_menu_title"
+msgstr "X-Ray快速访问"
+
+msgid "fetch_data"
+msgstr "获取AI数据"
+
+# ==============================
+# API KEYS
+# ==============================
+
+msgid "gemini_key_title"
+msgstr "Google Gemini API密钥"
+
+msgid "gemini_key_hint"
+msgstr "API密钥"
+
+msgid "gemini_key_desc"
+msgstr "免费获取API密钥：\nhttps://makersuite.google.com/app/apikey\n\n或编辑 config.lua：\ngemini_api_key = \"AIzaSy...\""
+
+msgid "testing_key"
+msgstr "正在测试API密钥..."
+
+msgid "gemini_key_saved"
+msgstr "Gemini API密钥已保存！"
+
+msgid "key_test_failed"
+msgstr "API密钥已保存但测试失败！\n\n错误：%s\n\n请检查您的API密钥。"
+
+msgid "chatgpt_key_title"
+msgstr "ChatGPT API密钥"
+
+msgid "chatgpt_key_hint"
+msgstr "sk-..."
+
+msgid "chatgpt_key_desc"
+msgstr "获取API密钥：\nhttps://platform.openai.com/api-keys\n\n或编辑 config.lua：\nchatgpt_api_key = \"sk-...\""
+
+msgid "chatgpt_key_saved"
+msgstr "ChatGPT API密钥已保存！"
+
+# ==============================
+# PROVIDER SELECTION
+# ==============================
+
+msgid "provider_select_title"
+msgstr "选择AI服务商"
+
+msgid "gemini_selected"
+msgstr "已选择Google Gemini"
+
+msgid "chatgpt_selected"
+msgstr "已选择ChatGPT"
+
+msgid "set_key_first"
+msgstr "请先设置API密钥"
+
+# ==============================
+# DEVICE-SIDE GENERATION & AI SETTINGS (v2)
+# ==============================
+
+msgid "menu_generate_xray"
+msgstr "生成 X-Ray"
+
+msgid "menu_api_key"
+msgstr "API 密钥"
+
+msgid "menu_select_model"
+msgstr "选择模型"
+
+msgid "model_select_title"
+msgstr "选择模型"
+
+msgid "provider_no_key_suffix"
+msgstr "（未设置密钥）"
+
+msgid "provider_selected"
+msgstr "已选择：%s"
+
+msgid "api_key_input_hint"
+msgstr "API 密钥"
+
+msgid "api_key_desc"
+msgstr "为 %s 输入 API 密钥。"
+
+msgid "api_key_saved"
+msgstr "已保存 %s 的 API 密钥"
+
+msgid "fetching_models"
+msgstr "正在获取模型列表…"
+
+msgid "model_selected"
+msgstr "已选择模型：%s"
+
+msgid "model_custom"
+msgstr "自定义…"
+
+msgid "model_name_hint"
+msgstr "模型名称"
+
+msgid "no_key_configured"
+msgstr "请先在【AI 设置】中配置 API 密钥。"
+
+msgid "extracting_text"
+msgstr "正在提取书籍文本…"
+
+msgid "op_analyzing"
+msgstr "分析中"
+
+msgid "op_merged"
+msgstr "已合并"
+
+msgid "op_consolidating"
+msgstr "整理中"
+
+msgid "gen_title"
+msgstr "生成 X-Ray 数据"
+
+msgid "gen_progress_fmt"
+msgstr "%d / %d  ·  %d%%  ·  %s\n%s\n人物 %d · 地点 %d · 事件 %d · 主题 %d\n[%s]"
+
+msgid "gen_complete_fmt"
+msgstr "X-Ray 生成完成！\n人物：%d\n地点：%d"
+
+msgid "gen_failed_fmt"
+msgstr "生成失败：\n%s"
+
+msgid "gen_stopped_fmt"
+msgstr "已停止（已处理 %d 个片段）"
+
+msgid "analysis_progress_fmt"
+msgstr "模型: %s\nAI分析进行中...\n正在处理: %d / %d\n(%d%%)"
+
+msgid "edit"
+msgstr "编辑"
+
+msgid "listing_files"
+msgstr "正在列出文件…"
+
+# ==============================
+# EXTRA TITLES
+# ==============================
+
+msgid "summary_title"
+msgstr "书籍概要"
+
+msgid "themes_title"
+msgstr "书籍主题"
+
+msgid "hist_bio"
+msgstr "人物生平"
+
+msgid "hist_importance"
+msgstr "书中重要性"
+
+msgid "hist_context"
+msgstr "书中背景"
+
+# ==============================
+# ABOUT
+# ==============================
+
+msgid "about_title"
+msgstr "X-Ray插件"
+
+msgid "about_text"
+msgstr ""
+"X-Ray插件\n"
+"═══════════════════════════════\n"
+"\n"
+"功能简介\n"
+"为您的电子书带来AI驱动的阅读体验！\n"
+"类似亚马逊Kindle X-Ray，智能提取人物、地点、\n"
+"时间线、历史背景等，支持无剧透渐进式分析。\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+" 云端同步\n"
+"• WebDAV/Dropbox支持\n"
+"• 自动上传/下载X-Ray数据\n"
+"• 多设备无缝同步\n"
+"• 保留渐进式分析进度\n"
+"\n"
+" 渐进式分析\n"
+"• 按阅读进度分段分析\n"
+"• 无剧透体验\n"
+"• 自动加载最佳缓存\n"
+"\n"
+ 进度感知\n"
+"• 显示阅读进度与分析进度\n"
+"• X-Ray仅分析到当前页\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+"完整功能：\n"
+"\n"
+" AI集成\n"
+"• Google Gemini\n"
+"• ChatGPT\n"
+"\n"
+" 人物管理\n"
+"• AI自动提取人物信息\n"
+"• 详细档案（角色/性别/职业）\n"
+"• 智能搜索与模糊匹配\n"
+"• 本章人物实时显示\n"
+"• 个人笔记系统\n"
+"\n"
+" 时间线\n"
+"• 关键事件按时序排列\n"
+"• 事件-人物关联\n"
+"• 章节定位\n"
+"\n"
+" 历史人物\n"
+"• 检测真实历史人物\n"
+"• 人物生平与时代\n"
+"• 书中背景与重要性\n"
+"• 直接/间接引用检测\n"
+"\n"
+" 地点与主题\n"
+"• 重要地点与描述\n"
+"• 主要主题提取\n"
+"• 无剧透概要\n"
+"• 作者简介\n"
+"\n"
+" 智能缓存\n"
+"• 渐进式缓存（xx%.json）\n"
+"• 永久有效，离线可用\n"
+"• 自动选择最佳缓存\n"
+"• 每本书独立存储\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+"快速入门：\n"
+"\n"
+"1. 配置API\n"
+"菜单 → X-Ray → AI设置\n"
+"→ Google Gemini API密钥\n"
+"（免费注册：makersuite.google.com）\n"
+"\n"
+"2. 选择分析模式\n"
+"菜单 → X-Ray → 获取AI数据\n"
+"• 无剧透模式：仅到当前页\n"
+"• 完整模式：全书分析\n"
+"\n"
+"3.（可选）配置云同步\n"
+"菜单 → X-Ray → 云端同步\n"
+"→ 管理服务器\n"
+"→ 设置WebDAV/Dropbox\n"
+"\n"
+4. 开始探索！\n"
+"• 人物：所有人物档案\n"
+"• 本章人物：当前章节\n"
+"• 时间线：事件追踪\n"
+"• 历史人物：真实人物\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+"使用技巧：\n"
+"\n"
+"• 首次使用无剧透模式，避免剧透\n"
+"• 阅读完成后可切换完整模式\n"
+"• 云同步保留所有渐进式缓存\n"
+"• Gemini Flash Lite最快且免费\n"
+"• 缓存永久有效，无需重复获取\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+"常见问题：\n"
+"\n"
+"问：如何避免剧透？\n"
+"答：选择\"仅到当前页\"模式，AI只分析\n"
+"您已读过的内容。\n"
+"\n"
+"问：渐进式缓存如何工作？\n"
+"答：自动切割分析结果，下次\n"
+"加载时选择最接近您进度的版本。\n"
+"\n"
+"问：云同步支持哪些服务？\n"
+"答：WebDAV和Dropbox。坚果云等WebDAV\n"
+"服务都可以使用。\n"
+"\n"
+"问：API密钥免费吗？\n"
+"答：Gemini API免费额度充足，大多数\n"
+"用户无需付费。\n"
+"\n"
+"问：如何清除缓存？\n"
+"答：菜单 → X-Ray → 清除缓存\n"
+"将删除主缓存和所有渐进式缓存。\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+"技术信息：\n"
+"\n"
+"缓存位置：\n"
+"<书籍>.sdr/xray_cache.lua（主缓存）\n"
+"<书籍>.sdr/xray_analysis/XX%.json（渐进式）\n"
+"\n"
+"设置位置：\n"
+"~/.config/koreader/settings/xray/\n"
+"\n"
+"═══════════════════════════════\n"
+"\n"
+"祝您阅读愉快！ 📖✨"
+
+# ==============================
+# LANGUAGE SELECTION
+# ==============================
+
+msgid "language_title"
+msgstr "选择语言"
+
+
+msgid "language_changed"
+msgstr "语言已更改：简体中文"
+
+msgid "please_restart"
+msgstr "请关闭书籍并重新打开\n以使更改完全生效。"
+
+# ==============================
+# PRESERVED FROM ORIGINAL PO (MISSING IN LUA)
+# ==============================
+
+msgid "language_name"
+msgstr "简体中文"
+
+msgid "wifi_required"
+msgstr "需要网络连接！\n\n是否要打开Wi-Fi以获取AI数据？"
+
+msgid "network_offline_prompt"
+msgstr "需要网络连接！\n\n是否要打开Wi-Fi以获取AI数据？"
+
+msgid "turn_on_wifi"
+msgstr "打开Wi-Fi"
+
+msgid "fetch_cancelled"
+msgstr "获取已取消。"
+
+msgid "wifi_connecting"
+msgstr "正在连接Wi-Fi...\n\n请稍候。"
+
+msgid "wifi_connected"
+msgstr "连接成功！\n\n正在获取AI数据..."
+
+msgid "error_503"
+msgstr "Gemini API过载！\n\n该模型目前请求过多。\n\n请几分钟后重试。\n\n提示：在config.lua中尝试其他模型：\ngemini_model = 'gemini-2.0-flash-exp'"
+
+msgid "error_429"
+msgstr "请求过多！\n\n您已达到API速率限制。\n\n请等待几分钟后重试。"
+
+msgid "error_404"
+msgstr "模型未找到！\n\n所选模型不存在。\n\n请在config.lua中更改模型：\ngemini_model = 'gemini-flash-lite-latest'"
+
+msgid "error_400"
+msgstr "请求错误！\n\n请检查您的API密钥或模型设置。"
+
+msgid "ai_fallback_unnamed_character"
+msgstr "未命名人物"
+
+msgid "ai_fallback_no_description"
+msgstr "暂无描述"
+
+msgid "ai_fallback_not_specified"
+msgstr "未指定"
+
+msgid "ai_fallback_unnamed_location"
+msgstr "未命名地点"
+
+msgid "ai_fallback_unnamed_person"
+msgstr "未命名人物"
+
+msgid "ai_fallback_no_biography"
+msgstr "暂无生平"
+
+msgid "ai_fallback_chapter"
+msgstr "章节"
+
+msgid "ai_fallback_no_event_description"
+msgstr "暂无事件描述"
+
+msgid "ai_fallback_unknown_book"
+msgstr "未知书籍"
+
+msgid "ai_fallback_unknown_author"
+msgstr "未知作者"
+
+msgid "ok"
+msgstr "确定"
+
+msgid "menu_fetch_full"
+msgstr "获取AI数据（全书）"
+
+msgid "menu_fetch_progress"
+msgstr "仅到当前页（无剧透）"
+
+msgid "progress_warning_low"
+msgstr "您的阅读进度较少（%d%%）\n\n是否继续？"
+
+msgid "progress_error"
+msgstr "无法获取阅读进度！\n\n是否改为分析全书？"
+
+msgid "error_info"
+msgstr "发生错误！"
+
+msgid "error_no_network"
+msgstr "无网络连接！\n\n请检查您的Wi-Fi连接。"
+
+msgid "error_network_timeout"
+msgstr "连接超时！\n\n请检查网络连接后重试。"
+
+msgid "error_invalid_api_key"
+msgstr "API密钥无效！\n\n请检查您的API密钥。"
+
+msgid "error_unknown"
+msgstr "未知错误！\n\n请重试。"
+
+# ==============================
+# LOCAL AI SETTINGS
+# ==============================
+
+msgid "menu_chatgpt_model"
+msgstr "选择ChatGPT模型"
+
+msgid "provider_local_name"
+msgstr "本地AI"
+
+msgid "menu_local_ai_settings"
+msgstr "本地AI设置"
+
+msgid "menu_local_ai_url"
+msgstr "本地AI服务地址"
+
+msgid "menu_local_ai_key"
+msgstr "本地AI密钥"
+
+msgid "menu_local_ai_model"
+msgstr "本地AI模型"
+
+msgid "local_url_hint"
+msgstr "例如 http://127.0.0.1:8045/v1"
+
+msgid "local_key_hint"
+msgstr "任意字符串（如果无需验证）"
+
+msgid "local_model_hint"
+msgstr "例如 claude-sonnet-4-5"
+
+msgid "local_url_saved"
+msgstr "本地AI地址已保存！"
+
+msgid "local_key_saved"
+msgstr "本地AI密钥已保存！"
+
+msgid "local_model_saved"
+msgstr "本地AI模型已保存！"
+
+msgid "local_ai_selected"
+msgstr "已选择本地AI"
+
+msgid "error_filtered"
+msgstr "内容已被过滤。"
+
+msgid "spoiler_preference_title"
+msgstr "剧透偏好"
+
+msgid "spoiler_free_option"
+msgstr "无剧透模式（仅分析%d%%的内容）"
+
+msgid "spoiler_free_option_with_cache"
+msgstr "基于%d%%缓存，分析到%d%%"
+
+msgid "full_book_option"
+msgstr "完整模式"
+
+msgid "spoiler_free_mode"
+msgstr "无剧透模式：%d%%"
+
+msgid "full_book_mode_active"
+msgstr "完整模式"
+
+msgid "menu_xray_progress"
+msgstr "X-Ray进度"
+
+msgid "reading_progress"
+msgstr "阅读进度"
+
+msgid "menu_full_analysis"
+msgstr "全文模式"

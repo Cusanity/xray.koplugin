@@ -1,0 +1,20 @@
+# GUI and AI provider dependencies for XRayGenerator.exe
+# Install with: pip install -r requirements.txt
+
+# GUI framework
+PyQt6>=6.6
+
+# AI providers (all may be used depending on user config)
+openai>=1.0
+anthropic>=0.25
+groq>=0.4
+google-generativeai>=0.3
+opencc-python-reimplemented>=0.1
+
+# HTTP and utility packages
+requests>=2.31
+python-dotenv>=1.0
+certifi>=2024.0
+charset-normalizer>=3.0
+idna>=3.0
+urllib3>=2.0

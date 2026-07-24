@@ -1,0 +1,141 @@
+# Release workflow — triggered by pushing a version tag: git tag v2.0.1 && git push origin v2.0.1
+#
+# Produces one release asset:
+#   xray.koplugin-v*.*.*.zip   — KOReader device-side plugin (Lua only)
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:          # manual trigger for testing builds (creates a draft release)
+
+permissions:
+  contents: write             # needed to create/upload the GitHub release
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Package the KOReader plugin (Lua device-side files only)
+  # ---------------------------------------------------------------------------
+  build-plugin:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Determine version
+        id: ver
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "version=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            # Manual run: derive version from _meta.lua so the zip is named correctly
+            VER=$(grep -oP '(?<=version = ")[^"]+' _meta.lua)
+            echo "version=v${VER}-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create plugin zip
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ZIP="xray.koplugin-${VERSION}.zip"
+
+          # Stage device-side files under xray.koplugin/ so the user can unzip
+          # directly into koreader/plugins/ and get the right layout.
+          STAGING=$(mktemp -d)
+          DEST="${STAGING}/xray.koplugin"
+          mkdir -p "${DEST}/languages" "${DEST}/prompts"
+
+          cp _meta.lua aihelper.lua cachemanager.lua chapteranalyzer.lua \
+             characternotes.lua config.lua.example generator.lua \
+             localization_xray.lua main.lua sync.lua xray_receiver.lua \
+             LICENSE "${DEST}/"
+          cp languages/*.po   "${DEST}/languages/"
+          cp prompts/zh.json  prompts/zh.lua  "${DEST}/prompts/"
+
+          (cd "${STAGING}" && zip -r "${GITHUB_WORKSPACE}/${ZIP}" xray.koplugin/)
+
+          echo "ZIP=${ZIP}" >> "$GITHUB_ENV"
+          echo "Created ${ZIP} ($(du -sh "$ZIP" | cut -f1))"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plugin-zip
+          path: xray.koplugin-*.zip
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Create the GitHub release and attach plugin artifact
+  # ---------------------------------------------------------------------------
+  release:
+    needs: [build-plugin]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts      # downloads all artifacts into artifacts/<name>/
+
+      - name: List artifacts
+        run: find artifacts -type f
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.build-plugin.outputs.version }}
+          name: "X-Ray Generator ${{ needs.build-plugin.outputs.version }}"
+          draft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: ${{ contains(needs.build-plugin.outputs.version, '-') }}
+          files: |
+            artifacts/plugin-zip/xray.koplugin-*.zip
+          body: |
+            ## 安装说明 / Installation
+
+            ### KOReader 插件（设备端）
+            1. 下载 `xray.koplugin-*.zip`
+            2. 解压到 `koreader/plugins/`，解压后目录结构如下：
+               ```
+               koreader/plugins/
+               └── xray.koplugin/
+                   ├── _meta.lua
+                   ├── aihelper.lua
+                   ├── cachemanager.lua
+                   ├── chapteranalyzer.lua
+                   ├── characternotes.lua
+                   ├── config.lua.example
+                   ├── generator.lua
+                   ├── localization_xray.lua
+                   ├── main.lua
+                   ├── sync.lua
+                   ├── xray_receiver.lua
+                   ├── LICENSE
+                   ├── languages/
+                   └── prompts/
+               ```
+            3. 重启 KOReader
+
+            ### 电脑端生成器（从源码运行）
+
+            ```bash
+            git clone https://github.com/Cusanity/xray.koplugin.git
+            cd xray.koplugin
+            python -m venv .venv
+            # Windows Git Bash:
+            source .venv/Scripts/activate
+            pip install -r requirements.txt
+            python generator_gui.py
+            ```
+
+            Linux/macOS 激活虚拟环境：
+
+            ```bash
+            source .venv/bin/activate
+            ```
+
+            Windows PowerShell 激活虚拟环境：
+
+            ```powershell
+            .\.venv\Scripts\Activate.ps1
+            ```
