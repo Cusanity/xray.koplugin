@@ -46,14 +46,13 @@ jobs:
           # directly into koreader/plugins/ and get the right layout.
           STAGING=$(mktemp -d)
           DEST="${STAGING}/xray.koplugin"
-          mkdir -p "${DEST}/languages" "${DEST}/prompts"
+          mkdir -p "${DEST}/languages"
 
-          cp _meta.lua aihelper.lua cachemanager.lua chapteranalyzer.lua \
-             characternotes.lua config.lua.example generator.lua \
+           cp _meta.lua cachemanager.lua chapteranalyzer.lua \
+             characternotes.lua \
              localization_xray.lua main.lua sync.lua xray_receiver.lua \
              LICENSE "${DEST}/"
           cp languages/*.po   "${DEST}/languages/"
-          cp prompts/zh.json  prompts/zh.lua  "${DEST}/prompts/"
 
           (cd "${STAGING}" && zip -r "${GITHUB_WORKSPACE}/${ZIP}" xray.koplugin/)
 
@@ -85,7 +84,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.build-plugin.outputs.version }}
-          name: "X-Ray Generator ${{ needs.build-plugin.outputs.version }}"
+          name: "X-Ray Plugin ${{ needs.build-plugin.outputs.version }}"
           draft: ${{ github.event_name == 'workflow_dispatch' }}
           prerelease: ${{ contains(needs.build-plugin.outputs.version, '-') }}
           files: |
@@ -100,19 +99,15 @@ jobs:
                koreader/plugins/
                └── xray.koplugin/
                    ├── _meta.lua
-                   ├── aihelper.lua
                    ├── cachemanager.lua
                    ├── chapteranalyzer.lua
                    ├── characternotes.lua
-                   ├── config.lua.example
-                   ├── generator.lua
                    ├── localization_xray.lua
                    ├── main.lua
                    ├── sync.lua
                    ├── xray_receiver.lua
                    ├── LICENSE
-                   ├── languages/
-                   └── prompts/
+                   └── languages/
                ```
             3. 重启 KOReader
 

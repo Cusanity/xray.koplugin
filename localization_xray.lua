@@ -330,12 +330,7 @@ function Localization:setLanguage(lang_code)
     end
     
     self:loadTranslations()
-    
-    local AIHelper = require("aihelper")
-    if AIHelper then
-        AIHelper:loadLanguage()
-    end
-    
+
     return true
 end
 
@@ -343,13 +338,7 @@ end
 function Localization:reload()
     logger.info("Localization: Reloading translations...")
     self:loadTranslations()
-    
-    -- Clear cached translations in AIHelper if it exists
-    local AIHelper = require("aihelper")
-    if AIHelper and AIHelper.localization then
-        AIHelper.localization = nil
-    end
-    
+
     logger.info("Localization: Reload complete")
 end
 

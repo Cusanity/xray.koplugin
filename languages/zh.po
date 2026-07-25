@@ -294,7 +294,7 @@ msgid "cache_save_failed"
 msgstr "缓存保存失败"
 
 msgid "cache_clear_confirm"
-msgstr "确认清除缓存\n\n清除缓存后：\n\n• 所有人物信息将被删除\n• 时间线将被删除\n• 历史人物将被删除\n• 地点和主题信息将被删除\n• 作者信息将被删除\n\n您需要重新从AI获取数据。\n\n确定要清除缓存吗？"
+msgstr "确认清除 X-Ray 数据吗"
 
 msgid "yes_clear"
 msgstr "确定清除"
@@ -303,7 +303,7 @@ msgid "cancel"
 msgstr "取消"
 
 msgid "cache_cleared"
-msgstr "缓存已清除！\n\n现在可以获取新数据：\n菜单 → X-Ray → 获取AI数据"
+msgstr "X-Ray 数据已清除"
 
 msgid "cache_not_found"
 msgstr "未找到缓存或无法清除"

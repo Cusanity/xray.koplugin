@@ -1,6 +1,6 @@
 # 📖 X-Ray 插件 - KOReader
 
-利用 AI 在 KOReader 上实现 Amazon Kindle X-Ray 功能，为任何 EPUB 书籍生成角色、地点、主题和时间线分析。
+在电脑端利用 AI 生成 X-Ray 数据，并在 KOReader 上实现 Amazon Kindle X-Ray 阅读体验，为任何 EPUB 书籍提供角色、地点、主题和时间线分析。
 
 > Fork 自 [koreader-xray-plugin](https://github.com/0zd3m1r/koreader-xray-plugin)，进行了架构重写：原版仅发送书名给 AI（导致幻觉和剧透），本 Fork **发送实际书籍文本**，确保分析准确。
 
@@ -97,22 +97,17 @@
 └── xray.koplugin/
     ├── _meta.lua
     ├── main.lua
-    ├── generator.lua
-    ├── aihelper.lua
     ├── cachemanager.lua
     ├── chapteranalyzer.lua
     ├── characternotes.lua
     ├── localization_xray.lua
     ├── sync.lua
     ├── xray_receiver.lua
-    ├── config.lua.example
     ├── languages/
     │   ├── en.po
     │   ├── zh.po
     │   └── zh_TW.po
-    └── prompts/
-        ├── zh.json
-        └── zh.lua
+    └── LICENSE
 ```
 
 重启 KOReader。
@@ -214,8 +209,6 @@ CALIBRE_LIBRARY=/path/to/your/Calibre Library
 ```
 xray.koplugin/
 ├── main.lua              # 插件 UI（菜单、X-Ray 查看器、文本选中处理）
-├── generator.lua         # 设备端 AI 生成器
-├── aihelper.lua          # AI API 客户端（多提供商）
 ├── cachemanager.lua      # 渐进式 JSON 缓存管理
 ├── chapteranalyzer.lua   # 设备端 EPUB 文本提取
 ├── characternotes.lua    # 角色笔记
@@ -223,7 +216,7 @@ xray.koplugin/
 ├── xray_receiver.lua     # 接收电脑推送的 X-Ray 数据
 ├── localization_xray.lua # 国际化
 ├── languages/            # 翻译文件（.po）
-├── prompts/zh.json       # AI 提示词（单一来源，设备端与 PC 端共用）
+├── prompts/zh.json       # AI 提示词（PC 端生成器使用）
 ├── generator_gui.py      # 电脑端 GUI 源码
 ├── gui_i18n.py           # GUI 国际化
 ├── .env.example          # API 密钥配置模板

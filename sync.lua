@@ -4,9 +4,6 @@
 local logger = require("logger")
 local lfs = require("libs/libkoreader-lfs")
 local ffiutil = require("ffi/util")
-local UIManager = require("ui/uimanager")
-local InfoMessage = require("ui/widget/infomessage")
-local _ = require("gettext")
 
 -- We'll use the APIs provided by KOReader
 local WebDavApi = require("apps/cloudstorage/webdavapi")
@@ -58,7 +55,7 @@ function Sync:listFolderAll(api, server, folder_path)
         sink     = ltn12.sink.table(sink),
     }
     
-    local code, headers, status = socket.skip(1, http.request(request))
+    local code, _, status = socket.skip(1, http.request(request))
     socketutil:reset_timeout()
     
     if not code or code < 200 or code > 299 then
@@ -158,9 +155,7 @@ end
 function Sync:getLocalPaths(cache_manager, book_path)
     local cache_file = cache_manager:getCachePath(book_path)
     local analysis_dir = cache_manager:getAnalysisCacheDir(book_path)
-    local book_dir = ffiutil.dirname(book_path)
-    local sdr_name = book_path:match("([^/]+)$") .. ".sdr" -- Constructed guess, but CacheManager knows best.
-    
+
     -- Actually, let's trust CacheManager's paths.
     -- We need to know the folder name to use on the server.
     -- Typically it's 'bookfile.sdr'.
@@ -204,21 +199,12 @@ function Sync:upload(cache_manager, server, book_path, callback)
     self:ensureRemoteFolder(api, server, remote_book_dir)
     self:ensureRemoteFolder(api, server, remote_analysis_dir)
     
-    -- Cache remote listings to avoid multi-roundtrips
-    local remote_analysis_items = nil
-    if server.type == "webdav" then
-         -- Get listing of existing files to check ETags
-         -- Pass relative path 'remote_analysis_dir'
-         remote_analysis_items = self:listFolderAll(api, server, remote_analysis_dir)
-    end
-    
     local success_count = 0
     local fail_count = 0
-    local skipped_count = 0
     local errors = {}
     
     -- Helper for uploading single file
-    local function upload_file(local_path, remote_dir, remote_items)
+    local function upload_file(local_path, remote_dir)
         if not lfs.attributes(local_path) then return end
         
         local filename = ffiutil.basename(local_path)
@@ -250,7 +236,7 @@ function Sync:upload(cache_manager, server, book_path, callback)
     -- Ideally we list parent dir too, but for now let's just force upload cache.lua as it changes often
     -- Or implement listing for it. Let's force it for safety as it's small.
     if lfs.attributes(paths.cache_file) then
-        upload_file(paths.cache_file, remote_book_dir, nil) 
+        upload_file(paths.cache_file, remote_book_dir)
     end
     
     
@@ -261,7 +247,7 @@ function Sync:upload(cache_manager, server, book_path, callback)
             -- Handle both legacy X%.json files and new xray_data.json
             if file:match("^%d+%%%.json$") or file == "xray_data.json" then
                 local local_file = paths.analysis_dir .. "/" .. file
-                upload_file(local_file, remote_analysis_dir, remote_analysis_items)
+                upload_file(local_file, remote_analysis_dir)
             end
         end
     end
@@ -348,10 +334,7 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
 
         if has_local_files then
              logger.info("Sync: Local analysis files found. Skipping download of " .. #items .. " items from cloud to prevent mixing.")
-             for _, item in ipairs(items) do
-                 -- Log skipped items for clarity if needed, or just count them
-                 skipped_count = skipped_count + 1
-             end
+               skipped_count = #items
         else
             logger.info("Sync: Processing", #items, "items from remote analysis folder")
             for i, item in ipairs(items) do

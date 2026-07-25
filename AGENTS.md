@@ -8,85 +8,26 @@ A KOReader plugin that brings an Amazon Kindle–style **X-Ray** feature to EPUB
 LLM to analyze the text a reader has *already read* (zero spoilers) and produces characters,
 locations, themes and a timeline, stored in `xray_data.json`.
 
-X-Ray data can be produced two ways, and **both must produce byte-compatible output**:
+X-Ray data is expected to be produced off-device and then synced to KOReader via cache/sync flows.
+This plugin focuses on rendering, filtering by reading progress, notes, and transfer.
 
-1. **On-device** (Lua, runs inside KOReader) — `generator.lua`
-2. **Batch on a PC** (Python) — `generator.py` and its helper modules
+## Data contract expectations
 
-## ⚠️ THE PARITY RULE (most important thing in this repo)
-
-> **`generator.lua` and the Python generator pipeline must match 100%, no exceptions.**
-> Whenever you touch one side, you MUST update the other side in the same change and verify
-> the output is identical.
-
-Concretely, the Lua `generator.lua` mirrors this set of Python modules:
-
-| Lua (device side)        | Python (PC side)                          | What must stay in sync |
-| ------------------------ | ----------------------------------------- | ---------------------- |
-| `generator.lua`          | `generator.py`                       | chunking, AI-call loop, checkpoint/resume, output assembly |
-| `MasterData` in `generator.lua` | `master_data.py` (`MasterData`, `deduplicate_characters`, `cleanup_data`) | accumulation, merge, dedup, importance ordering, `to_output_json` shape |
-| helper functions in `generator.lua` | `text_utils.py` (`META_THEMES`, `normalize_character_name`, `normalize_location_name`, `normalize_for_dedup`, `sanitize_text`) | theme filtering, name/location normalization, percent-marker stripping |
-| xref/sort logic in `generator.lua` | `master_data.py::_xref_sort_key` | `spine * 10_000_000 + offset` event ordering |
-
-The code comments in `generator.lua` already call out each Python source it mirrors
-(e.g. "Mirrors `text_utils.py::normalize_character_name`"). **Keep those comments accurate** —
-if you change behavior on one side, update both the code and the "Mirrors …" comment.
-
-### Known intentional differences (do NOT "fix" these)
-
-These are the *only* allowed divergences, because the runtime can't do them on-device:
-
-- **Traditional→Simplified (`t2s`) conversion**: Python uses `opencc`; Lua skips it (no opencc
-  on-device). Normalization functions are otherwise identical.
-- **AI-call concurrency**: `generator.py` fans chunks out through a
-  `ThreadPoolExecutor` (`get_max_workers()` workers, `as_completed`), and consolidation is
-  parallelized the same way. `generator.lua` runs **strictly sequentially** — one in-flight
-  `callAIForChunk` at a time, driven by a self-rescheduling `processNext` via
-  `UIManager:scheduleIn`, because KOReader's Lua runtime is single-threaded with a cooperative
-  UI loop and blocking HTTP. This only affects *speed and call ordering*, never the output:
-  chunk building, prompts, and `MasterData` merge are all order-independent, so the final
-  `xray_data.json` is identical.
-- Anything else that differs is a **bug** — reconcile it.
-
-### Output contract (must be identical from both generators)
-
-`xray_data.json`:
-- character `events` carry `{event, xref, anchor}` (no `percent`)
+`xray_data.json` is consumed by this plugin with these expectations:
+- character `events` carry `{event, xref, anchor}`
 - `timeline` entries carry `{sequence, event, character, xref, anchor}`
 - `descriptions` are progressive `[{percent, text}]` entries
-- `themes` are filtered against `META_THEMES` and capped at 8
-- characters/locations are ordered by an importance score
-- output stays compatible with progressive loading in `cachemanager.lua` and entity-visibility
-  logic in `main.lua`
-
-Before merging any generator change, regenerate the same book with **both** paths and diff the
-resulting `xray_data.json`. They must be equal (modulo the documented `t2s` difference).
-
-## Shared prompt source (single source of truth)
-
-Both generators load prompts from **`prompts/zh.json`** — never hardcode or fork prompt text.
-
-- Python: `generator.py::_load_prompts()` reads `prompts/zh.json` and pulls
-  `system_instruction`, `chunk_summary`, `consolidate_description`, `consolidate_summary`.
-- Lua: `prompts/zh.lua` is a loader that reads the same `prompts/zh.json`; `aihelper.lua` and
-  `generator.lua` consume it.
-
-If you change a prompt, edit `prompts/zh.json` only. Both sides pick it up automatically.
-The plugin is **optimized for Chinese-language books** (prompts, name normalization, 繁简 handling).
+- progressive visibility relies on cache/progress behavior in `cachemanager.lua` and `main.lua`
 
 ## File map
 
 ### Device side (Lua, runs in KOReader)
 - `main.lua` — plugin UI: menu, X-Ray viewer, text-selection handler, entity visibility.
-- `generator.lua` — on-device generator (mirror of the Python pipeline; see PARITY RULE).
-- `aihelper.lua` — AI API client (Gemini / ChatGPT / local OpenAI-compatible).
 - `cachemanager.lua` — progressive `xray_data.json` cache (loads only ≤ current reading %).
-- `chapteranalyzer.lua` — on-device EPUB text extraction via KOReader xpointer API.
 - `characternotes.lua` — per-character user notes.
 - `sync.lua` — WebDAV upload/download of X-Ray data.
 - `xray_receiver.lua` — tiny LuaSocket HTTP server that accepts `xray_data.json` pushed from a PC.
 - `localization_xray.lua`, `languages/` — i18n strings.
-- `config.lua` (from `config.lua.example`) — API keys / endpoints.
 - `_meta.lua` — plugin metadata (name/version/description).
 
 ## i18n rule
@@ -102,7 +43,7 @@ hardcoded fallback table for strings that might be needed before the `.po` is lo
 - The fallback table in `localization_xray.lua` should be updated too, but the `.po` file is
   canonical.
 
-### GUI i18n (Python, `generator_gui.py`)
+### GUI i18n (Python tooling, `generator_gui.py`)
 
 The PyQt6 desktop GUI has its **own** i18n system, separate from the Lua `.po` files above
 (different runtime, different strings). It lives in `gui_i18n.py`.
@@ -138,7 +79,7 @@ Rules:
   systems; do not try to share keys between them.
 
 ### PC side (Python batch generator)
-- `generator.py` — entry point / orchestration (mirror of `generator.lua`).
+- `generator.py` — entry point / orchestration for off-device generation.
   Exposes optional GUI hooks: `set_gui_hooks(progress_hook, fatal_raises)`, `FatalChunkError`,
   and `_fatal_stop()` (used instead of `os._exit(1)` in the chunk worker). These are **inert in
   CLI mode** (default hard-exit / `[PROGRESS]` prints unchanged); only `generator_gui.py` sets them.
@@ -164,7 +105,7 @@ Rules:
 ## Build / test / lint
 
 - **No build step** for Lua — files run directly in KOReader.
-- **Lua syntax check**: `luac -p generator.lua` (basic) or lint with `luacheck` (see repo tasks).
+- **Lua syntax/lint**: use `luacheck` on plugin files (see repo tasks).
 - **Python**: `python generator.py book.epub` (single book) or `--browse` (Calibre library).
   Requires `pip install openai opencc-python-reimplemented python-dotenv` (`anthropic` optional).
 - **GUI (optional)**: `python generator_gui.py` (`pip install PyQt6`, or `requirements.txt`).
@@ -172,25 +113,20 @@ Rules:
 - **GUI i18n check**: `python check_i18n.py` — verifies every `tr()` key exists in all
   language dicts in `gui_i18n.py`, and flags f-strings in translatable contexts.
   **Run this whenever `generator_gui.py` or `gui_i18n.py` is touched.**
-- **Parity test** (do this for any generator change): generate the same EPUB with both
-  `generator.lua` (on device / test harness) and `generator.py`, then diff `xray_data.json`.
+- **Sync test**: generate data with Python tooling, push/sync into KOReader, then confirm
+  `xray_data.json` is loaded and visible as expected in plugin UI.
 
 ## Change checklist for agents
 
-When editing the generator/data pipeline:
+When editing data ingestion/rendering in this plugin:
 
 1. Make the change on one side.
-2. Apply the equivalent change on the other side in the **same** commit.
-3. Update the "Mirrors …" comments in `generator.lua` if behavior/mapping changed.
-4. If prompts changed, edit only `prompts/zh.json`.
-5. Regenerate a book with both paths and confirm identical `xray_data.json`
-   (modulo the documented `t2s` difference).
-6. Keep the output contract (fields, ordering, caps) unchanged unless the task explicitly
+2. Keep the output contract (fields, ordering, caps) unchanged unless the task explicitly
    requires it — and if it changes, update `cachemanager.lua`/`main.lua` consumers too.
 
-When editing `generator_gui.py` or `gui_i18n.py`:
+When editing Python generator tooling (`generator.py`, `generator_gui.py`, `gui_i18n.py`):
 
-7. **Run `python check_i18n.py` and fix all errors before committing.**
+3. **Run `python check_i18n.py` and fix all errors before committing.**
    This script uses AST-based analysis to verify every `tr("key")` call has a
    matching entry in every language dict in `gui_i18n.py`, and flags f-strings
    passed to Qt text methods without `tr()`. Exit 0 = clean.
