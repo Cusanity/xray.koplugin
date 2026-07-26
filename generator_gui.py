@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import traceback
 from typing import Any
@@ -51,7 +52,7 @@ except ImportError:
     pass
 
 from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QThread, QUrl, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -1475,6 +1476,7 @@ class MainWindow(QMainWindow):
         self._price_catalog: dict = {}
         self._webdav_authenticated = False
         self._wizard_menu_action: QAction | None = None
+        self._xray_shortcut_action: QAction | None = None
 
         self._key_edits: dict[str, QLineEdit] = {}
         self._extra_books: list[str] = []  # non-Calibre EPUBs added manually
@@ -1523,6 +1525,11 @@ class MainWindow(QMainWindow):
         self._wizard_menu_action = self.menuBar().addAction("")
         self._wizard_menu_action.triggered.connect(self._open_setup_wizard)
         self._refresh_setup_wizard_menu_action()
+
+        self._xray_shortcut_action = self.menuBar().addAction(
+            tr("Create Desktop Shortcut")
+        )
+        self._xray_shortcut_action.triggered.connect(self._create_desktop_shortcut)
 
     # ------------------------------------------------------------ config tab
     def _add_key_row(
@@ -1703,6 +1710,13 @@ class MainWindow(QMainWindow):
         cleanup_btn.clicked.connect(self._cleanup_ghosts)
         refresh_all_btn = QPushButton(tr("Refresh All"))
         refresh_all_btn.clicked.connect(self._populate_table)
+        self.webdav_refresh_btn = QPushButton(tr("Refresh Selected"))
+        self.webdav_refresh_btn.clicked.connect(self._refresh_selected_webdav_status)
+        self.webdav_auto_refresh_chk = QCheckBox(tr("Auto-refresh WebDAV status"))
+        self.webdav_auto_refresh_chk.setChecked(False)
+        self.webdav_auto_refresh_chk.toggled.connect(
+            self._on_webdav_auto_refresh_toggled
+        )
         self.filter_edit = QLineEdit()
         self.filter_edit.setPlaceholderText(tr("Filter by title or author…"))
         self.filter_edit.textChanged.connect(self._apply_filter)
@@ -1710,6 +1724,8 @@ class MainWindow(QMainWindow):
         top.addWidget(add_btn)
         top.addWidget(cleanup_btn)
         top.addWidget(refresh_all_btn)
+        top.addWidget(self.webdav_refresh_btn)
+        top.addWidget(self.webdav_auto_refresh_chk)
         top.addWidget(self.filter_edit, 1)
         layout.addLayout(top)
 
@@ -1749,8 +1765,6 @@ class MainWindow(QMainWindow):
         self.webdav_download_btn.clicked.connect(self._webdav_download_selected)
         self.webdav_delete_btn = QPushButton(tr("Delete Selected from WebDAV"))
         self.webdav_delete_btn.clicked.connect(self._webdav_delete_selected)
-        self.webdav_refresh_btn = QPushButton(tr("Refresh Selected"))
-        self.webdav_refresh_btn.clicked.connect(self._refresh_selected_webdav_status)
         self.start_btn = QPushButton(tr("Generate X-Ray"))
         self.start_btn.clicked.connect(self._start_analysis)
         self._chain_info_label = _ChainInfoLabel(lambda: self._chain_tooltip_text())
@@ -1762,7 +1776,6 @@ class MainWindow(QMainWindow):
         bottom.addWidget(self.webdav_upload_btn)
         bottom.addWidget(self.webdav_download_btn)
         bottom.addWidget(self.webdav_delete_btn)
-        bottom.addWidget(self.webdav_refresh_btn)
         _start_w = QWidget()
         _start_l = QHBoxLayout(_start_w)
         _start_l.setContentsMargins(0, 0, 0, 0)
@@ -2437,6 +2450,9 @@ class MainWindow(QMainWindow):
         self.webdav_autopush_chk.setChecked(
             bool(self._prefs.get("webdav_auto_push", False))
         )
+        self.webdav_auto_refresh_chk.setChecked(
+            bool(self._prefs.get("webdav_auto_refresh_books", False))
+        )
         if self._prefs.get("calibre_library"):
             self.calibre_edit.setText(self._prefs["calibre_library"])
         if self._prefs.get("xray_output_dir"):
@@ -2481,6 +2497,86 @@ class MainWindow(QMainWindow):
         font.setBold(is_new)
         self._wizard_menu_action.setFont(font)
 
+    def _create_desktop_shortcut(self) -> None:
+        if os.name != "nt":
+            QMessageBox.information(
+                self,
+                tr("Not supported"),
+                tr("Desktop shortcut creation is only supported on Windows."),
+            )
+            return
+
+        desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+        if not os.path.isdir(desktop):
+            QMessageBox.warning(
+                self,
+                tr("Error"),
+                tr("Desktop folder not found: {path}").format(path=desktop),
+            )
+            return
+
+        shortcut_path = os.path.join(desktop, "X-Ray.lnk")
+
+        if getattr(sys, "frozen", False):
+            target_path = sys.executable
+            arguments = ""
+            working_dir = os.path.dirname(sys.executable)
+        else:
+            launcher = os.path.join(_SCRIPT_DIR, "run_generator_gui.cmd")
+            working_dir = _SCRIPT_DIR
+            if os.path.isfile(launcher):
+                target_path = launcher
+                arguments = ""
+            else:
+                venv_py = os.path.join(
+                    _SCRIPT_DIR, "prompts", ".venv", "Scripts", "pythonw.exe"
+                )
+                if not os.path.isfile(venv_py):
+                    venv_py = os.path.join(
+                        _SCRIPT_DIR, "prompts", ".venv", "Scripts", "python.exe"
+                    )
+                target_path = venv_py
+                arguments = f'"{os.path.join(_SCRIPT_DIR, "generator_gui.py")}"'
+
+        def _ps_quote(value: str) -> str:
+            return value.replace("'", "''")
+
+        ps_script = (
+            "$w = New-Object -ComObject WScript.Shell\n"
+            f"$s = $w.CreateShortcut('{_ps_quote(shortcut_path)}')\n"
+            f"$s.TargetPath = '{_ps_quote(target_path)}'\n"
+            f"$s.Arguments = '{_ps_quote(arguments)}'\n"
+            f"$s.WorkingDirectory = '{_ps_quote(working_dir)}'\n"
+            "$s.Description = 'KOReader X-Ray Generator GUI'\n"
+            "$s.Save()\n"
+        )
+
+        try:
+            subprocess.run(
+                [
+                    "powershell",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-Command",
+                    ps_script,
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(
+                self,
+                tr("Error"),
+                tr("Failed to create desktop shortcut: {error}").format(error=str(e)),
+            )
+            return
+
+        self.statusBar().showMessage(
+            tr("Desktop shortcut created: {path}").format(path=shortcut_path), 5000
+        )
+
     def _maybe_offer_setup_wizard(self) -> None:
         if self._setup_wizard_has_launched():
             return
@@ -2514,6 +2610,7 @@ class MainWindow(QMainWindow):
                 "webdav_user": self.webdav_user_edit.text().strip(),
                 "webdav_pass": self.webdav_pass_edit.text(),
                 "webdav_auto_push": self.webdav_autopush_chk.isChecked(),
+                "webdav_auto_refresh_books": self.webdav_auto_refresh_chk.isChecked(),
                 "calibre_library": self.calibre_edit.text().strip(),
                 "xray_output_dir": self.xray_output_edit.text().strip(),
                 "temperature": self.temp_spin.value(),
@@ -2833,14 +2930,22 @@ class MainWindow(QMainWindow):
                 status.setForeground(QColor("#b58900"))
             self.book_table.setItem(r, 3, status)
             init_code = (
-                "checking" if self._webdav_config().is_configured()
+                webdav_sync.STATUS_NONE if self._webdav_config().is_configured()
                 else webdav_sync.STATUS_UNCONFIGURED
             )
             self.book_table.setItem(r, 4, webdav_status_item(init_code))
         self.book_count_label.setText(tr("{n} books").format(n=len(rows)))
         self._apply_filter()
         # Fill the WebDAV column asynchronously if a server is configured.
-        self._refresh_webdav_status()
+        if self.webdav_auto_refresh_chk.isChecked():
+            self._refresh_webdav_status()
+
+    def _on_webdav_auto_refresh_toggled(self, enabled: bool) -> None:
+        """Persist Books-tab WebDAV auto-refresh preference and optionally refresh now."""
+        self._prefs["webdav_auto_refresh_books"] = bool(enabled)
+        calibre_browser._save_preferences(self._prefs)
+        if enabled and self.book_table.rowCount() > 0:
+            self._refresh_webdav_status()
 
     def _apply_filter(self) -> None:
         text = self.filter_edit.text().strip().lower()
@@ -3018,11 +3123,18 @@ class MainWindow(QMainWindow):
 
     # ================================================================== log
     def _append_log(self, text: str) -> None:
-        self.log_view.moveCursor(self.log_view.textCursor().MoveOperation.End)
-        self.log_view.insertPlainText(text)
+        sb = self.log_view.verticalScrollBar()
+        prev_scroll = sb.value()
+
+        # Insert at document end without forcing the viewport to jump.
+        cursor = QTextCursor(self.log_view.document())
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(text)
+
         if self.autoscroll_chk.isChecked():
-            sb = self.log_view.verticalScrollBar()
             sb.setValue(sb.maximum())
+        else:
+            sb.setValue(min(prev_scroll, sb.maximum()))
 
     def _save_log(self) -> None:
         path, _ = QFileDialog.getSaveFileName(

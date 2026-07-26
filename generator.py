@@ -27,7 +27,7 @@ import os
 import sys
 import threading
 import time
-from typing import Any
+from typing import Any, NoReturn
 
 # =============================================================================
 # Load .env file (if python-dotenv is installed)
@@ -182,7 +182,7 @@ def request_stop() -> None:
     _stop_requested = True
 
 
-def _fatal_stop(message: str = "X-Ray chunk processing failed") -> None:
+def _fatal_stop(message: str = "X-Ray chunk processing failed") -> NoReturn:
     """Handle an unrecoverable chunk error.
 
     In CLI mode this hard-exits the process (original behavior). When a GUI has
@@ -233,7 +233,7 @@ def emit_progress(
         parts.append(f"op={op}")
 
     if parts:
-        _original_print(f"[PROGRESS] {' '.join(parts)}", flush=True)
+        print(f"[PROGRESS] {' '.join(parts)}", flush=True)
 
 
 # =============================================================================
@@ -782,6 +782,8 @@ def consolidate_pending_items(
             master.apply_summary_consolidation(text)
             print("    ✓ [Summ] summary updated")
         else:
+            if name is None:
+                continue
             master.apply_consolidation(etype, name, text, current_pct)
             print(f"    ✓ [{etype[:4].capitalize()}] {name} updated")
 

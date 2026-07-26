@@ -116,8 +116,8 @@ class EpubReader:
 
     def get_chapters(
         self,
-    ) -> tuple[list[tuple[str, str]] | None, str | None, str | None]:
-        """Extract chapters as list of (title, text) tuples in reading order."""
+    ) -> tuple[list[tuple[str, str, int]] | None, str, str]:
+        """Extract chapters as (title, text, spine_idx) tuples in reading order."""
         try:
             with zipfile.ZipFile(self.epub_path) as z:
                 opf_path = self._get_opf_path(z)
@@ -140,7 +140,7 @@ class EpubReader:
 
         except Exception as e:
             print(f"Fatal error reading EPUB: {e}")
-            return None, None, None
+            return None, "Unknown Title", "Unknown Author"
 
     def _get_opf_path(self, z: zipfile.ZipFile) -> str:
         txt = z.read("META-INF/container.xml")
