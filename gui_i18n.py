@@ -199,6 +199,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Max Workers": "最大并发数",
         "Max Chunk Size (chars)": "最大分块大小（字符）",
         "Consolidation Batch Size:": "合并批次大小：",
+        "Auto by model chunk size": "按模型分块大小自动决定",
         "Number of entities (characters + locations + summary) merged into one consolidation request. Higher = fewer requests but larger payloads. 0 (auto) uses the built-in default.": "每次合并请求中合并的实体数（人物 + 地点 + 摘要）。数值越大，请求次数越少但数据量越大。0（自动）使用内置默认值。",
         "auto": "自动",
         # Sync tab
@@ -529,6 +530,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Max Workers": "最大並行數",
         "Max Chunk Size (chars)": "最大區塊大小（字元）",
         "Consolidation Batch Size:": "合併批次大小：",
+        "Auto by model chunk size": "按模型區塊大小自動決定",
         "Number of entities (characters + locations + summary) merged into one consolidation request. Higher = fewer requests but larger payloads. 0 (auto) uses the built-in default.": "每次合併請求中合併的實體數（人物 + 地點 + 摘要）。數值越大，請求次數越少但資料量越大。0（自動）使用內建預設值。",
         "auto": "自動",
         "KOReader Device": "KOReader 裝置",

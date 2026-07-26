@@ -2393,8 +2393,14 @@ class MainWindow(QMainWindow):
                 "larger payloads. 0 (auto) uses the built-in default."
             )
         )
+        self.consolidation_dynamic_chk = QCheckBox(tr("Auto by model chunk size"))
+        self.consolidation_dynamic_chk.setChecked(True)
+        self.consolidation_dynamic_chk.toggled.connect(
+            self._on_consolidation_dynamic_toggled
+        )
         consol_row.addWidget(consol_label)
         consol_row.addWidget(self.consolidation_spin)
+        consol_row.addWidget(self.consolidation_dynamic_chk)
         consol_row.addStretch(1)
         v.addLayout(consol_row)
         return box
@@ -2426,6 +2432,10 @@ class MainWindow(QMainWindow):
                 spin.setValue(int(chunk.get(key, 0)))
             except (TypeError, ValueError):
                 spin.setValue(0)
+
+    def _on_consolidation_dynamic_toggled(self, enabled: bool) -> None:
+        """Disable manual batch-size input when dynamic sizing is enabled."""
+        self.consolidation_spin.setEnabled(not enabled)
 
     # ============================================================ prefs / env
     def _load_prefs_into_ui(self) -> None:
@@ -2472,6 +2482,9 @@ class MainWindow(QMainWindow):
             )
         except (TypeError, ValueError):
             self.consolidation_spin.setValue(0)
+        self.consolidation_dynamic_chk.setChecked(
+            bool(self._prefs.get("consolidation_batch_dynamic", True))
+        )
 
     def _open_setup_wizard(self) -> None:
         if not self._setup_wizard_has_launched():
@@ -2620,6 +2633,7 @@ class MainWindow(QMainWindow):
                 "max_workers": workers,
                 "max_chunk_size": chunk,
                 "consolidation_batch_size": self.consolidation_spin.value(),
+                "consolidation_batch_dynamic": self.consolidation_dynamic_chk.isChecked(),
             }
         )
         calibre_browser._save_preferences(self._prefs)
@@ -2657,6 +2671,7 @@ class MainWindow(QMainWindow):
             max_workers=workers,
             max_chunk_size=chunk,
             consolidate_batch_size=self.consolidation_spin.value(),
+            consolidate_batch_dynamic=self.consolidation_dynamic_chk.isChecked(),
         )
         self._save_prefs()
         self.statusBar().showMessage(tr("Settings applied."), 4000)

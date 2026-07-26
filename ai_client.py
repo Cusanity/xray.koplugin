@@ -155,6 +155,7 @@ _max_chunk_overrides: dict[str, int] = {}
 # 0 (or unset) falls back to the built-in default.
 CONSOLIDATE_BATCH_SIZE_DEFAULT = 15
 _consolidate_batch_size = CONSOLIDATE_BATCH_SIZE_DEFAULT
+_consolidate_batch_dynamic = False
 
 # Token usage tracking (accumulated per batch run; keyed by "provider/model").
 _token_lock = threading.Lock()
@@ -223,7 +224,8 @@ def configure(
 
 def _load_performance_from_prefs() -> None:
     """Load per-provider worker/chunk overrides from ``.xray_prefs.json``."""
-    global _max_workers_overrides, _max_chunk_overrides, _consolidate_batch_size
+    global _max_workers_overrides, _max_chunk_overrides
+    global _consolidate_batch_size, _consolidate_batch_dynamic
     try:
         from calibre_browser import _load_preferences
 
@@ -245,6 +247,7 @@ def _load_performance_from_prefs() -> None:
     _max_workers_overrides = _clean(prefs.get("max_workers"))
     _max_chunk_overrides = _clean(prefs.get("max_chunk_size"))
     _consolidate_batch_size = _clean_batch_size(prefs.get("consolidation_batch_size"))
+    _consolidate_batch_dynamic = bool(prefs.get("consolidation_batch_dynamic", False))
 
 
 def _clean_batch_size(value: Any) -> int:
@@ -261,12 +264,14 @@ def configure_performance(
     max_workers: dict[str, Any] | None = None,
     max_chunk_size: dict[str, Any] | None = None,
     consolidate_batch_size: int | None = None,
+    consolidate_batch_dynamic: bool | None = None,
 ) -> None:
     """Set per-provider worker/chunk-size overrides at runtime.
 
     Values <= 0 (or non-numeric) are treated as "use the built-in default".
     """
-    global _max_workers_overrides, _max_chunk_overrides, _consolidate_batch_size
+    global _max_workers_overrides, _max_chunk_overrides
+    global _consolidate_batch_size, _consolidate_batch_dynamic
 
     def _clean(raw: dict[str, Any]) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -285,6 +290,8 @@ def configure_performance(
         _max_chunk_overrides = _clean(max_chunk_size)
     if consolidate_batch_size is not None:
         _consolidate_batch_size = _clean_batch_size(consolidate_batch_size)
+    if consolidate_batch_dynamic is not None:
+        _consolidate_batch_dynamic = bool(consolidate_batch_dynamic)
 
 
 def get_max_workers_overrides() -> dict[str, int]:
@@ -297,8 +304,21 @@ def get_max_chunk_overrides() -> dict[str, int]:
     return dict(_max_chunk_overrides)
 
 
-def get_consolidate_batch_size() -> int:
-    """Return the number of entities merged into one consolidation request."""
+def is_consolidate_batch_dynamic() -> bool:
+    """Return whether dynamic consolidation batching is enabled."""
+    return _consolidate_batch_dynamic
+
+
+def get_consolidate_batch_size(
+    provider: str | None = None, model: str | None = None
+) -> int:
+    """Return entities merged into one consolidation request.
+
+    Dynamic mode is handled by the caller with exact request-size packing based
+    on rendered prompt payload size; this getter returns the configured static
+    fallback size used when dynamic mode is off.
+    """
+    _ = provider, model
     return _consolidate_batch_size
 
 

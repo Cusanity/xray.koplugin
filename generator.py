@@ -108,6 +108,7 @@ from ai_client import (
     get_max_chunk_size,
     get_max_workers,
     get_consolidate_batch_size,
+    is_consolidate_batch_dynamic,
     get_selected_api,
     get_selected_model,
     save_ai_cache,
@@ -710,8 +711,6 @@ def consolidate_pending_items(
     if not chars_to_consolidate and not locs_to_consolidate and not summary_needed:
         return
 
-    batch_size = get_consolidate_batch_size()
-
     # Build one flat list of work items with a stable integer id, plus a
     # parallel list of "how to apply the result" instructions.
     items: list[dict[str, Any]] = []
@@ -740,18 +739,67 @@ def consolidate_pending_items(
         )
         apply_ops.append(("summary", None))
 
-    print(
-        f"  [Consolidation] Batching {len(chars_to_consolidate)} chars, "
-        f"{len(locs_to_consolidate)} locs"
-        f"{', summary' if summary_needed else ''} "
-        f"into {math.ceil(len(items) / batch_size)} request(s)"
-    )
-
     # Run each batch as its own request; batches themselves run concurrently.
-    batches = [
-        items[i : i + batch_size]
-        for i in range(0, len(items), batch_size)
-    ]
+    #
+    # Dynamic mode uses exact rendered request size:
+    #   len(SYSTEM_PROMPT) + len(CONSOLIDATE_BATCH_PROMPT % json.dumps(batch))
+    # and keeps each request within the active provider/model chunk-size budget.
+    if is_consolidate_batch_dynamic():
+        provider = get_selected_api()
+        model = get_selected_model()
+        target_chars = max(1, get_max_chunk_size(provider=provider, model=model))
+
+        batches: list[list[dict[str, Any]]] = []
+        batch_req_chars: list[int] = []
+        current: list[dict[str, Any]] = []
+
+        for item in items:
+            trial = current + [item]
+            payload = json.dumps(trial, ensure_ascii=False)
+            req_chars = len(SYSTEM_PROMPT) + len(CONSOLIDATE_BATCH_PROMPT % payload)
+
+            if current and req_chars > target_chars:
+                current_payload = json.dumps(current, ensure_ascii=False)
+                current_req_chars = len(SYSTEM_PROMPT) + len(
+                    CONSOLIDATE_BATCH_PROMPT % current_payload
+                )
+                batches.append(current)
+                batch_req_chars.append(current_req_chars)
+                current = [item]
+            else:
+                current = trial
+
+        if current:
+            current_payload = json.dumps(current, ensure_ascii=False)
+            current_req_chars = len(SYSTEM_PROMPT) + len(
+                CONSOLIDATE_BATCH_PROMPT % current_payload
+            )
+            batches.append(current)
+            batch_req_chars.append(current_req_chars)
+
+        print(
+            f"  [Consolidation] Dynamic batching {len(chars_to_consolidate)} chars, "
+            f"{len(locs_to_consolidate)} locs"
+            f"{', summary' if summary_needed else ''} "
+            f"into {len(batches)} request(s) @ <= {target_chars} chars/request"
+        )
+        for i, req_chars in enumerate(batch_req_chars, 1):
+            print(
+                f"    [Consolidation Batch {i}/{len(batch_req_chars)}] "
+                f"req_chars={req_chars}"
+            )
+    else:
+        batch_size = get_consolidate_batch_size()
+        batches = [
+            items[i : i + batch_size]
+            for i in range(0, len(items), batch_size)
+        ]
+        print(
+            f"  [Consolidation] Batching {len(chars_to_consolidate)} chars, "
+            f"{len(locs_to_consolidate)} locs"
+            f"{', summary' if summary_needed else ''} "
+            f"into {math.ceil(len(items) / batch_size)} request(s)"
+        )
 
     results: dict[int, str] = {}
     with concurrent.futures.ThreadPoolExecutor(
