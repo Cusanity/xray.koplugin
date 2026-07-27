@@ -80,6 +80,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Model": "模型",
         "OpenAI-compatible Endpoint": "OpenAI 兼容端点",
         "Cloud Provider API Keys": "云提供商 API 密钥",
+        "Provider Balance / Cost Check": "提供商余额 / 成本检查",
+        "DeepSeek supports a direct balance API. OpenAI and Claude expose "
+        "usage/cost APIs that typically require admin keys.":
+            "DeepSeek 提供直接余额 API。OpenAI 和 Claude 提供用量/成本 API，通常需要管理员密钥。",
+        "Check Balance / Cost": "检查余额 / 成本",
+        "Balance API": "余额 API",
+        "Check": "检查",
+        "Check DeepSeek user balance API.": "检查 DeepSeek 用户余额 API。",
+        "Open Docs": "打开文档",
+        "Check provider balance and recent costs.": "检查提供商余额和近期成本。",
         "Custom Headers": "自定义请求头",
         "One per line: Header-Name: value   (or a JSON object)":
             "每行一个：Header-Name: value（或一个 JSON 对象）",
@@ -316,6 +326,40 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Choose a model on the Configuration tab.": "请在“配置”标签页中选择模型。",
         "Missing API key": "缺少 API 密钥",
         "Set the API key for this provider.": "请为该提供商设置 API 密钥。",
+        "Endpoint: {url}": "端点：{url}",
+        "Available for API calls: {value}": "可用于 API 调用：{value}",
+        "Yes": "是",
+        "No": "否",
+        "No balance entries returned.": "未返回余额条目。",
+        "Total balance": "总余额",
+        "Available balance": "可用余额",
+        "Total granted": "累计授予",
+        "Total used": "累计已用",
+        "Last 7 days cost (USD): {value}": "最近 7 天成本（USD）：{value}",
+        "No cost records returned for the selected window.": "所选时间窗口未返回成本记录。",
+        "OpenAI-compatible endpoint detected. Balance APIs vary by vendor; automatic balance check is only implemented for official OpenAI and DeepSeek.":
+            "检测到 OpenAI 兼容端点。余额 API 因厂商而异；自动检查仅支持官方 OpenAI 与 DeepSeek。",
+        "OpenAI cost endpoint usually requires an Admin API key.": "OpenAI 成本端点通常需要管理员 API 密钥。",
+        "Anthropic usage/cost APIs require an Admin API key (sk-ant-admin...).":
+            "Anthropic 用量/成本 API 需要管理员 API 密钥（sk-ant-admin...）。",
+        "DeepSeek has a direct user balance endpoint.": "DeepSeek 提供直接用户余额端点。",
+        "OpenAI provides usage/cost admin APIs, but no direct user balance endpoint like DeepSeek.":
+            "OpenAI 提供用量/成本管理员 API，但没有像 DeepSeek 那样的直接用户余额端点。",
+        "Anthropic provides usage/cost admin APIs, but no direct user balance endpoint like DeepSeek.":
+            "Anthropic 提供用量/成本管理员 API，但没有像 DeepSeek 那样的直接用户余额端点。",
+        "Groq does not document a public balance endpoint in its API reference.":
+            "Groq 在 API 参考中未记录公开余额端点。",
+        "Gemini billing is managed in AI Studio/Cloud Billing and has no public Gemini balance endpoint.":
+            "Gemini 计费由 AI Studio/Cloud Billing 管理，且无公开 Gemini 余额端点。",
+        "Gemini billing balance is managed in AI Studio/Cloud Billing; "
+        "no public Gemini API balance endpoint is documented.":
+            "Gemini 余额由 AI Studio/Cloud Billing 管理；未记录公开的 Gemini API 余额端点。",
+        "Unsupported provider.": "不支持的提供商。",
+        "Checking…": "检查中…",
+        "Balance / Cost": "余额 / 成本",
+        "Balance / cost check complete.": "余额 / 成本检查完成。",
+        "Failed to fetch provider balance/cost: {error}": "获取提供商余额/成本失败：{error}",
+        "Balance / cost check failed.": "余额 / 成本检查失败。",
         "=== Starting batch: {n} book(s) | {api} / {model} ===\n":
             "=== 开始批处理：{n} 本书 | {api} / {model} ===\n",
         "Stop requested — stopping as soon as possible…\n":
@@ -415,6 +459,16 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Model": "模型",
         "OpenAI-compatible Endpoint": "OpenAI 相容端點",
         "Cloud Provider API Keys": "雲端供應商 API 金鑰",
+        "Provider Balance / Cost Check": "供應商餘額 / 成本檢查",
+        "DeepSeek supports a direct balance API. OpenAI and Claude expose "
+        "usage/cost APIs that typically require admin keys.":
+            "DeepSeek 提供直接餘額 API。OpenAI 與 Claude 提供用量/成本 API，通常需要管理員金鑰。",
+        "Check Balance / Cost": "檢查餘額 / 成本",
+        "Balance API": "餘額 API",
+        "Check": "檢查",
+        "Check DeepSeek user balance API.": "檢查 DeepSeek 使用者餘額 API。",
+        "Open Docs": "開啟文件",
+        "Check provider balance and recent costs.": "檢查供應商餘額與近期成本。",
         "Custom Headers": "自訂請求標頭",
         "One per line: Header-Name: value   (or a JSON object)":
             "每行一個：Header-Name: value（或一個 JSON 物件）",
@@ -642,6 +696,40 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Choose a model on the Configuration tab.": "請在「設定」分頁中選擇模型。",
         "Missing API key": "缺少 API 金鑰",
         "Set the API key for this provider.": "請為此供應商設定 API 金鑰。",
+        "Endpoint: {url}": "端點：{url}",
+        "Available for API calls: {value}": "可用於 API 呼叫：{value}",
+        "Yes": "是",
+        "No": "否",
+        "No balance entries returned.": "未回傳餘額條目。",
+        "Total balance": "總餘額",
+        "Available balance": "可用餘額",
+        "Total granted": "累計授予",
+        "Total used": "累計已用",
+        "Last 7 days cost (USD): {value}": "最近 7 天成本（USD）：{value}",
+        "No cost records returned for the selected window.": "所選時間範圍未回傳成本記錄。",
+        "OpenAI-compatible endpoint detected. Balance APIs vary by vendor; automatic balance check is only implemented for official OpenAI and DeepSeek.":
+            "偵測到 OpenAI 相容端點。餘額 API 依廠商而異；自動檢查僅支援官方 OpenAI 與 DeepSeek。",
+        "OpenAI cost endpoint usually requires an Admin API key.": "OpenAI 成本端點通常需要管理員 API 金鑰。",
+        "Anthropic usage/cost APIs require an Admin API key (sk-ant-admin...).":
+            "Anthropic 用量/成本 API 需要管理員 API 金鑰（sk-ant-admin...）。",
+        "DeepSeek has a direct user balance endpoint.": "DeepSeek 提供直接使用者餘額端點。",
+        "OpenAI provides usage/cost admin APIs, but no direct user balance endpoint like DeepSeek.":
+            "OpenAI 提供用量/成本管理員 API，但沒有像 DeepSeek 那樣的直接使用者餘額端點。",
+        "Anthropic provides usage/cost admin APIs, but no direct user balance endpoint like DeepSeek.":
+            "Anthropic 提供用量/成本管理員 API，但沒有像 DeepSeek 那樣的直接使用者餘額端點。",
+        "Groq does not document a public balance endpoint in its API reference.":
+            "Groq 在 API 參考中未記錄公開餘額端點。",
+        "Gemini billing is managed in AI Studio/Cloud Billing and has no public Gemini balance endpoint.":
+            "Gemini 計費由 AI Studio/Cloud Billing 管理，且無公開 Gemini 餘額端點。",
+        "Gemini billing balance is managed in AI Studio/Cloud Billing; "
+        "no public Gemini API balance endpoint is documented.":
+            "Gemini 餘額由 AI Studio/Cloud Billing 管理；未記錄公開的 Gemini API 餘額端點。",
+        "Unsupported provider.": "不支援的供應商。",
+        "Checking…": "檢查中…",
+        "Balance / Cost": "餘額 / 成本",
+        "Balance / cost check complete.": "餘額 / 成本檢查完成。",
+        "Failed to fetch provider balance/cost: {error}": "取得供應商餘額/成本失敗：{error}",
+        "Balance / cost check failed.": "餘額 / 成本檢查失敗。",
         "=== Starting batch: {n} book(s) | {api} / {model} ===\n":
             "=== 開始批次處理：{n} 本書 | {api} / {model} ===\n",
         "Stop requested — stopping as soon as possible…\n":

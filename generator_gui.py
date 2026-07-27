@@ -24,6 +24,10 @@ import socket
 import subprocess
 import sys
 import traceback
+from datetime import datetime, timedelta, timezone
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from typing import Any
 
 # -----------------------------------------------------------------------------
@@ -223,6 +227,221 @@ def reset_model_caches() -> None:
     ):
         if hasattr(ai_client, name):
             setattr(ai_client, name, None)
+
+
+def _http_json(url: str, headers: dict[str, str], timeout: float = 15.0) -> dict:
+    """GET JSON and return a dict with helpful errors on HTTP failures."""
+    req = urllib_request.Request(url=url, method="GET", headers=headers)
+    try:
+        with urllib_request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib_error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="replace").strip()
+        except Exception:  # noqa: BLE001
+            body = ""
+        if body:
+            raise RuntimeError(f"HTTP {e.code}: {body}") from e
+        raise RuntimeError(f"HTTP {e.code}: {e.reason}") from e
+    except urllib_error.URLError as e:
+        raise RuntimeError(str(e.reason)) from e
+
+
+def _safe_float(value: Any) -> float | None:
+    """Best-effort float conversion for API amounts."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _check_deepseek_balance(api_key: str) -> str:
+    """Fetch and format DeepSeek balance output."""
+    if not api_key:
+        raise ValueError(tr("Set the API key for this provider."))
+    endpoint = "https://api.deepseek.com/user/balance"
+    data = _http_json(
+        endpoint,
+        {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+    )
+    lines = [
+        tr("Provider: {value}").format(value="DeepSeek"),
+        tr("Endpoint: {url}").format(url=endpoint),
+    ]
+    if isinstance(data.get("is_available"), bool):
+        yes_no = tr("Yes") if data["is_available"] else tr("No")
+        lines.append(tr("Available for API calls: {value}").format(value=yes_no))
+
+    infos = data.get("balance_infos")
+    if not isinstance(infos, list) or not infos:
+        lines.append(tr("No balance entries returned."))
+        return "\n".join(lines)
+
+    labels = (
+        ("total_balance", tr("Total balance")),
+        ("available_balance", tr("Available balance")),
+        ("total_granted", tr("Total granted")),
+        ("total_used", tr("Total used")),
+    )
+    for i, info in enumerate(infos, start=1):
+        if not isinstance(info, dict):
+            continue
+        currency = str(info.get("currency") or info.get("currency_name") or "USD")
+        lines.append(f"[{i}] {currency}")
+        for key, label in labels:
+            if key in info:
+                lines.append(f"  {label}: {info[key]}")
+    return "\n".join(lines)
+
+
+def _check_openai_cost(api_key: str, api_base_url: str) -> str:
+    """Fetch OpenAI organization costs (7d window) when on official API."""
+    if not api_key:
+        raise ValueError(tr("Set the API key for this provider."))
+    if "api.openai.com" not in (api_base_url or ""):
+        return tr(
+            "OpenAI-compatible endpoint detected. Balance APIs vary by vendor; "
+            "automatic balance check is only implemented for official OpenAI and DeepSeek."
+        )
+
+    start_time = int((datetime.now(timezone.utc) - timedelta(days=7)).timestamp())
+    query = urllib_parse.urlencode(
+        {
+            "start_time": start_time,
+            "bucket_width": "1d",
+            "limit": 7,
+        }
+    )
+    endpoint = f"https://api.openai.com/v1/organization/costs?{query}"
+    data = _http_json(
+        endpoint,
+        {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+    )
+    total = 0.0
+    for bucket in data.get("data", []):
+        if not isinstance(bucket, dict):
+            continue
+        for result in bucket.get("results", []):
+            if not isinstance(result, dict):
+                continue
+            amount = result.get("amount")
+            if isinstance(amount, dict):
+                value = _safe_float(amount.get("value"))
+                if value is not None:
+                    total += value
+
+    lines = [
+        tr("Provider: {value}").format(value="OpenAI"),
+        tr("Endpoint: {url}").format(url=endpoint),
+        tr("OpenAI cost endpoint usually requires an Admin API key."),
+    ]
+    if total > 0:
+        lines.append(tr("Last 7 days cost (USD): {value}").format(value=f"{total:.4f}"))
+    else:
+        lines.append(tr("No cost records returned for the selected window."))
+    return "\n".join(lines)
+
+
+def _check_claude_cost(admin_api_key: str) -> str:
+    """Fetch Anthropic organization cost report (7d window)."""
+    if not admin_api_key:
+        raise ValueError(tr("Set the API key for this provider."))
+    start = (datetime.now(timezone.utc) - timedelta(days=7)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    end = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    query = urllib_parse.urlencode(
+        {
+            "starting_at": start.isoformat().replace("+00:00", "Z"),
+            "ending_at": end.isoformat().replace("+00:00", "Z"),
+            "bucket_width": "1d",
+        }
+    )
+    endpoint = f"https://api.anthropic.com/v1/organizations/cost_report?{query}"
+    data = _http_json(
+        endpoint,
+        {
+            "x-api-key": admin_api_key,
+            "anthropic-version": "2023-06-01",
+        },
+    )
+    total = 0.0
+    for bucket in data.get("data", []):
+        if not isinstance(bucket, dict):
+            continue
+        for result in bucket.get("results", []):
+            if not isinstance(result, dict):
+                continue
+            amount = result.get("amount")
+            if isinstance(amount, dict):
+                value = _safe_float(amount.get("value"))
+            else:
+                value = _safe_float(amount)
+            if value is not None:
+                total += value
+
+    lines = [
+        tr("Provider: {value}").format(value="Anthropic Claude"),
+        tr("Endpoint: {url}").format(url=endpoint),
+        tr("Anthropic usage/cost APIs require an Admin API key (sk-ant-admin...)."),
+    ]
+    if total > 0:
+        lines.append(tr("Last 7 days cost (USD): {value}").format(value=f"{total:.4f}"))
+    else:
+        lines.append(tr("No cost records returned for the selected window."))
+    return "\n".join(lines)
+
+
+def fetch_provider_balance_report(
+    provider: str, keys: dict[str, str], api_base_url: str
+) -> str:
+    """Return a provider-specific balance/cost report text."""
+    if provider == "deepseek":
+        return _check_deepseek_balance(keys.get("DEEPSEEK_API_KEY", ""))
+    if provider == "openai":
+        return _check_openai_cost(keys.get("XRAY_API_KEY", ""), api_base_url)
+    if provider == "claude":
+        return _check_claude_cost(keys.get("CLAUDE_API_KEY", ""))
+    if provider == "groq":
+        return tr(
+            "Groq does not document a public balance endpoint in its API reference."
+        )
+    if provider == "gemini":
+        return tr(
+            "Gemini billing balance is managed in AI Studio/Cloud Billing; "
+            "no public Gemini API balance endpoint is documented."
+        )
+    return tr("Unsupported provider.")
+
+
+def provider_balance_tooltip(provider: str) -> str:
+    """Explain availability of a DeepSeek-style balance API by provider."""
+    if provider == "deepseek":
+        return tr("DeepSeek has a direct user balance endpoint.")
+    if provider == "openai":
+        return tr(
+            "OpenAI provides usage/cost admin APIs, but no direct user balance endpoint like DeepSeek."
+        )
+    if provider == "claude":
+        return tr(
+            "Anthropic provides usage/cost admin APIs, but no direct user balance endpoint like DeepSeek."
+        )
+    if provider == "groq":
+        return tr(
+            "Groq does not document a public balance endpoint in its API reference."
+        )
+    if provider == "gemini":
+        return tr(
+            "Gemini billing is managed in AI Studio/Cloud Billing and has no public Gemini balance endpoint."
+        )
+    return tr("Unsupported provider.")
 
 
 def _provider_icon_asset_path(provider_key: str) -> str | None:
@@ -500,6 +719,31 @@ class ModelFetchWorker(QObject):
     def run(self) -> None:
         try:
             self.done.emit(fetch_models_for(self._api))
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
+
+
+class ProviderBalanceWorker(QObject):
+    """Fetches provider balance/cost information off the UI thread."""
+
+    done = pyqtSignal(str)
+    failed = pyqtSignal(str)
+
+    def __init__(self, provider: str, keys: dict[str, str], api_base_url: str) -> None:
+        super().__init__()
+        self._provider = provider
+        self._keys = keys
+        self._api_base_url = api_base_url
+
+    def run(self) -> None:
+        try:
+            self.done.emit(
+                fetch_provider_balance_report(
+                    self._provider,
+                    self._keys,
+                    self._api_base_url,
+                )
+            )
         except Exception as e:  # noqa: BLE001
             self.failed.emit(str(e))
 
@@ -1467,6 +1711,9 @@ class MainWindow(QMainWindow):
         self._proc_worker: ProcessWorker | None = None
         self._model_thread: QThread | None = None
         self._model_worker: ModelFetchWorker | None = None
+        self._balance_thread: QThread | None = None
+        self._balance_worker: ProviderBalanceWorker | None = None
+        self._active_balance_btn: QPushButton | None = None
         self._scan_thread: QThread | None = None
         self._scan_worker: ScanWorker | None = None
         self._webdav_thread: QThread | None = None
@@ -1983,7 +2230,15 @@ class MainWindow(QMainWindow):
         return w
 
     # =========================================== retry / fallback chain editor
-    _CHAIN_COLS = ("Provider", "Model", "Retries", "Cooldown (s)", "Input ($/M tok)", "Output ($/M tok)")
+    _CHAIN_COLS = (
+        "Provider",
+        "Model",
+        "Retries",
+        "Cooldown (s)",
+        "Input ($/M tok)",
+        "Output ($/M tok)",
+        "Balance API",
+    )
 
     def _build_chain_box(self) -> QGroupBox:
         box = QGroupBox(tr("Retry / Fallback Chain"))
@@ -2018,6 +2273,7 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
         self.chain_table.setMinimumHeight(150)
         v.addWidget(self.chain_table)
 
@@ -2114,8 +2370,33 @@ class MainWindow(QMainWindow):
         out_item.setFlags(out_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
         table.setItem(r, 4, inp_item)
         table.setItem(r, 5, out_item)
+        self._chain_set_balance_cell(r, provider)
         if self._price_catalog:
             self._chain_fill_cost_row(r, provider, model)
+
+    def _chain_set_balance_cell(self, r: int, provider: str) -> None:
+        """Render the Balance API column widget based on provider support."""
+        table = self.chain_table
+        if provider == "deepseek":
+            btn = QPushButton(tr("Check"))
+            btn.setToolTip(tr("Check DeepSeek user balance API."))
+            btn.clicked.connect(
+                lambda _=False, b=btn: self._check_provider_balance(
+                    provider="deepseek", trigger_button=b
+                )
+            )
+            table.setCellWidget(r, 6, btn)
+            return
+
+        holder = QWidget()
+        holder_layout = QHBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, 0, 0)
+        holder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        info = QLabel("ⓘ")
+        info.setToolTip(provider_balance_tooltip(provider))
+        info.setStyleSheet("color: #607d8b; font-weight: bold;")
+        holder_layout.addWidget(info)
+        table.setCellWidget(r, 6, holder)
 
     def _start_chain_price_fetch(self) -> None:
         """Fetch LiteLLM prices in the background and populate cost columns."""
@@ -2187,6 +2468,7 @@ class MainWindow(QMainWindow):
             mdl_widget.addItems(fetch_models_for(provider))
             mdl_widget.setCurrentText(current)
             mdl_widget.blockSignals(False)
+        self._chain_set_balance_cell(r, provider)
         self._chain_refresh_cost_row(r)
 
     def _open_add_model_dialog(self) -> None:
@@ -2818,6 +3100,56 @@ class MainWindow(QMainWindow):
         self._model_worker.failed.connect(self._model_thread.quit)
         self._model_thread.finished.connect(self._cleanup_model_thread)
         self._model_thread.start()
+
+    def _check_provider_balance(
+        self,
+        provider: str | None = None,
+        trigger_button: QPushButton | None = None,
+    ) -> None:
+        """Run provider-specific balance/cost checks in a background thread."""
+        if self._balance_thread is not None:
+            return
+        self._apply_config()
+        provider = provider or self.provider_combo.currentData() or "openai"
+        keys = {
+            env_var: self._key_edits[env_var].text().strip()
+            for env_var, _attr, _label, _secret in KEY_FIELDS
+        }
+        api_base = self._key_edits["XRAY_API_BASE"].text().strip() or ai_client.API_BASE_URL
+
+        self._active_balance_btn = trigger_button
+        if self._active_balance_btn is not None:
+            self._active_balance_btn.setEnabled(False)
+        self.statusBar().showMessage(tr("Checking…"))
+
+        self._balance_thread = QThread()
+        self._balance_worker = ProviderBalanceWorker(provider, keys, api_base)
+        self._balance_worker.moveToThread(self._balance_thread)
+        self._balance_thread.started.connect(self._balance_worker.run)
+        self._balance_worker.done.connect(self._on_balance_check_done)
+        self._balance_worker.failed.connect(self._on_balance_check_failed)
+        self._balance_worker.done.connect(self._balance_thread.quit)
+        self._balance_worker.failed.connect(self._balance_thread.quit)
+        self._balance_thread.finished.connect(self._cleanup_balance_thread)
+        self._balance_thread.start()
+
+    def _on_balance_check_done(self, text: str) -> None:
+        QMessageBox.information(self, tr("Balance / Cost"), text)
+        self.statusBar().showMessage(tr("Balance / cost check complete."), 4000)
+
+    def _on_balance_check_failed(self, msg: str) -> None:
+        text = tr("Failed to fetch provider balance/cost: {error}").format(error=msg)
+        QMessageBox.warning(self, tr("Balance / Cost"), text)
+        self.statusBar().showMessage(tr("Balance / cost check failed."), 4000)
+
+    def _cleanup_balance_thread(self) -> None:
+        if self._active_balance_btn is not None:
+            self._active_balance_btn.setEnabled(True)
+        self._active_balance_btn = None
+        if self._balance_thread is not None:
+            self._balance_thread.wait()
+        self._balance_thread = None
+        self._balance_worker = None
 
     def _on_models_done(self, models: list) -> None:
         current = self.model_combo.currentText()
