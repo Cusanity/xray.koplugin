@@ -55,7 +55,7 @@ try:
 except ImportError:
     pass
 
-from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QThread, QUrl, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTextCursor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -169,6 +169,7 @@ _PROVIDER_ICON_EXTS = (".ico", ".png", ".svg")
 _PROVIDER_ICON_SIZE = 18
 
 DEFAULT_DEVICE_PORT = 8763
+_BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 # =============================================================================
@@ -442,6 +443,33 @@ def provider_balance_tooltip(provider: str) -> str:
             "Gemini billing is managed in AI Studio/Cloud Billing and has no public Gemini balance endpoint."
         )
     return tr("Unsupported provider.")
+
+
+def deepseek_peak_pricing_active(now: datetime | None = None) -> bool:
+    """Return True when current Beijing time is in DeepSeek peak window."""
+    now = now or datetime.now(timezone.utc)
+    bj = now.astimezone(_BEIJING_TZ)
+    minute_of_day = bj.hour * 60 + bj.minute
+    in_morning_peak = 9 * 60 <= minute_of_day < 12 * 60
+    in_afternoon_peak = 14 * 60 <= minute_of_day < 18 * 60
+    return in_morning_peak or in_afternoon_peak
+
+
+def deepseek_pricing_badge_text() -> str:
+    """Badge text for current DeepSeek pricing period."""
+    if deepseek_peak_pricing_active():
+        return tr("Peak x2")
+    return tr("Off-peak x1")
+
+
+def deepseek_pricing_tooltip() -> str:
+    """Tooltip text describing DeepSeek peak-valley pricing and current status."""
+    now_bj = datetime.now(timezone.utc).astimezone(_BEIJING_TZ)
+    status = tr("Current: Peak x2") if deepseek_peak_pricing_active(now_bj) else tr("Current: Off-peak x1")
+    return tr(
+        "DeepSeek peak pricing windows (Beijing): 09:00-12:00 and 14:00-18:00. "
+        "All billable items are 2x during peak windows."
+    ) + "\n" + tr("Beijing time now: {time}").format(time=now_bj.strftime("%H:%M")) + "\n" + status
 
 
 def _provider_icon_asset_path(provider_key: str) -> str | None:
@@ -1589,6 +1617,11 @@ class CostSummaryDialog(QDialog):
         self._total_label.setStyleSheet("font-weight: bold;")
         layout.addWidget(self._total_label)
 
+        self._pricing_note_label = QLabel("")
+        self._pricing_note_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._pricing_note_label.setWordWrap(True)
+        layout.addWidget(self._pricing_note_label)
+
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
         btn_box.accepted.connect(self.accept)
         layout.addWidget(btn_box)
@@ -1622,12 +1655,26 @@ class CostSummaryDialog(QDialog):
     # ---------------------------------------------------------------- pricing
 
     def _on_prices_loaded(self, catalog: dict, last_modified: str) -> None:
+        now_bj = datetime.now(timezone.utc).astimezone(_BEIJING_TZ)
+        deepseek_peak = deepseek_peak_pricing_active(now_bj)
+        has_deepseek = any(prov == "deepseek" for prov, _mdl, _counts in self._rows)
+
         if not catalog:
             self._status_label.setText(
                 tr("Could not fetch prices (offline?). Token counts are still accurate.")
             )
             for r in range(self._table.rowCount()):
                 self._table.item(r, 5).setText(tr("N/A"))
+            if has_deepseek:
+                mode = tr("Peak x2") if deepseek_peak else tr("Off-peak x1")
+                self._pricing_note_label.setText(
+                    tr("DeepSeek pricing mode applied: {mode} (Beijing {time}).").format(
+                        mode=mode,
+                        time=now_bj.strftime("%H:%M"),
+                    )
+                )
+            else:
+                self._pricing_note_label.setText("")
             return
 
         total_cost = 0.0
@@ -1636,10 +1683,19 @@ class CostSummaryDialog(QDialog):
             price = _lookup_litellm_price(catalog, prov, mdl)
             if price:
                 inp_rate, out_rate = price
-                cost = counts["prompt"] * inp_rate + counts["completion"] * out_rate
+                multiplier = 2.0 if (prov == "deepseek" and deepseek_peak) else 1.0
+                cost = (counts["prompt"] * inp_rate + counts["completion"] * out_rate) * multiplier
                 total_cost += cost
                 any_known = True
                 self._table.item(r, 5).setText(f"${cost:.6f}")  # noqa: i18n
+                if prov == "deepseek":
+                    mode = tr("Peak x2") if deepseek_peak else tr("Off-peak x1")
+                    self._table.item(r, 5).setToolTip(
+                        tr("DeepSeek pricing mode applied: {mode} (Beijing {time}).").format(
+                            mode=mode,
+                            time=now_bj.strftime("%H:%M"),
+                        )
+                    )
             else:
                 self._table.item(r, 5).setText(tr("unknown"))
 
@@ -1663,6 +1719,16 @@ class CostSummaryDialog(QDialog):
                     cost=f"{total_cost:.4f}"
                 )
             )
+        if has_deepseek:
+            mode = tr("Peak x2") if deepseek_peak else tr("Off-peak x1")
+            self._pricing_note_label.setText(
+                tr("DeepSeek pricing mode applied: {mode} (Beijing {time}).").format(
+                    mode=mode,
+                    time=now_bj.strftime("%H:%M"),
+                )
+            )
+        else:
+            self._pricing_note_label.setText("")
 
 
 # =============================================================================
@@ -1721,6 +1787,7 @@ class MainWindow(QMainWindow):
         self._price_thread: QThread | None = None
         self._price_fetcher: _PriceFetcher | None = None
         self._price_catalog: dict = {}
+        self._deepseek_peak_timer: QTimer | None = None
         self._webdav_authenticated = False
         self._wizard_menu_action: QAction | None = None
         self._xray_shortcut_action: QAction | None = None
@@ -1742,6 +1809,12 @@ class MainWindow(QMainWindow):
         self._load_prefs_into_ui()
         self._on_provider_changed()
         self._maybe_offer_setup_wizard()
+
+        # Keep DeepSeek peak/off-peak badge in sync with current Beijing time.
+        self._deepseek_peak_timer = QTimer(self)
+        self._deepseek_peak_timer.setInterval(60_000)
+        self._deepseek_peak_timer.timeout.connect(self._refresh_deepseek_pricing_ui)
+        self._deepseek_peak_timer.start()
 
         # Auto-scan the Calibre library at launch so the book list is ready
         # without a manual click (only when a valid library path is set).
@@ -2378,6 +2451,12 @@ class MainWindow(QMainWindow):
         """Render the Balance API column widget based on provider support."""
         table = self.chain_table
         if provider == "deepseek":
+            holder = QWidget()
+            holder_layout = QHBoxLayout(holder)
+            holder_layout.setContentsMargins(0, 0, 0, 0)
+            holder_layout.setSpacing(6)
+            holder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
             btn = QPushButton(tr("Check"))
             btn.setToolTip(tr("Check DeepSeek user balance API."))
             btn.clicked.connect(
@@ -2385,7 +2464,17 @@ class MainWindow(QMainWindow):
                     provider="deepseek", trigger_button=b
                 )
             )
-            table.setCellWidget(r, 6, btn)
+
+            badge = QLabel(deepseek_pricing_badge_text())
+            if deepseek_peak_pricing_active():
+                badge.setStyleSheet("color: #c62828; font-weight: bold;")
+            else:
+                badge.setStyleSheet("color: #2e7d32; font-weight: bold;")
+            badge.setToolTip(deepseek_pricing_tooltip())
+
+            holder_layout.addWidget(btn)
+            holder_layout.addWidget(badge)
+            table.setCellWidget(r, 6, holder)
             return
 
         holder = QWidget()
@@ -2397,6 +2486,19 @@ class MainWindow(QMainWindow):
         info.setStyleSheet("color: #607d8b; font-weight: bold;")
         holder_layout.addWidget(info)
         table.setCellWidget(r, 6, holder)
+
+    def _refresh_deepseek_pricing_ui(self) -> None:
+        """Refresh DeepSeek pricing badge in the chain table once per minute."""
+        if not hasattr(self, "chain_table"):
+            return
+        if self._balance_thread is not None:
+            return
+        table = self.chain_table
+        for r in range(table.rowCount()):
+            prov_widget = table.cellWidget(r, 0)
+            provider = prov_widget.currentData() if prov_widget else "openai"
+            if provider == "deepseek":
+                self._chain_set_balance_cell(r, provider)
 
     def _start_chain_price_fetch(self) -> None:
         """Fetch LiteLLM prices in the background and populate cost columns."""

@@ -88,6 +88,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Balance API": "余额 API",
         "Check": "检查",
         "Check DeepSeek user balance API.": "检查 DeepSeek 用户余额 API。",
+        "Peak x2": "高峰 x2",
+        "Off-peak x1": "平时 x1",
+        "Current: Peak x2": "当前：高峰 x2",
+        "Current: Off-peak x1": "当前：平时 x1",
+        "DeepSeek peak pricing windows (Beijing): 09:00-12:00 and 14:00-18:00. All billable items are 2x during peak windows.":
+            "DeepSeek 高峰定价时段（北京时间）：09:00-12:00 和 14:00-18:00。高峰时段所有计费项均为 2 倍。",
+        "Beijing time now: {time}": "当前北京时间：{time}",
+        "DeepSeek pricing mode applied: {mode} (Beijing {time}).":
+            "已应用 DeepSeek 定价模式：{mode}（北京时间 {time}）。",
         "Open Docs": "打开文档",
         "Check provider balance and recent costs.": "检查提供商余额和近期成本。",
         "Custom Headers": "自定义请求头",
@@ -467,6 +476,15 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Balance API": "餘額 API",
         "Check": "檢查",
         "Check DeepSeek user balance API.": "檢查 DeepSeek 使用者餘額 API。",
+        "Peak x2": "高峰 x2",
+        "Off-peak x1": "平時 x1",
+        "Current: Peak x2": "目前：高峰 x2",
+        "Current: Off-peak x1": "目前：平時 x1",
+        "DeepSeek peak pricing windows (Beijing): 09:00-12:00 and 14:00-18:00. All billable items are 2x during peak windows.":
+            "DeepSeek 高峰定價時段（北京時間）：09:00-12:00 與 14:00-18:00。高峰時段所有計費項均為 2 倍。",
+        "Beijing time now: {time}": "目前北京時間：{time}",
+        "DeepSeek pricing mode applied: {mode} (Beijing {time}).":
+            "已套用 DeepSeek 定價模式：{mode}（北京時間 {time}）。",
         "Open Docs": "開啟文件",
         "Check provider balance and recent costs.": "檢查供應商餘額與近期成本。",
         "Custom Headers": "自訂請求標頭",
