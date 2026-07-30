@@ -2,6 +2,13 @@
 
 Guidance for AI coding agents working in `xray.koplugin`. Read this before touching any file.
 
+## Global rule: search KOReader core first
+
+Before writing ANY code including new Lua utility, UI pattern, or API call, **always search
+the sibling `koreader/` folder** for existing implementations.
+KOReader ships a large frontend library (`frontend/`, `plugins/`) — reuse its helpers, widgets,
+and conventions rather than reinventing them.
+
 ## What this plugin is
 
 A KOReader plugin that brings an Amazon Kindle–style **X-Ray** feature to EPUB books: it uses an
