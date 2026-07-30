@@ -255,13 +255,99 @@ function Sync:upload(cache_manager, server, book_path, callback)
     if callback then callback(success_count, fail_count, errors) end
 end
 
-function Sync:download(cache_manager, server, book_path, callback, force, progress_callback)
+-- List all .sdr subdirectories in the server's base folder (WebDAV only)
+function Sync:listRemoteSdrFolders(api, server, base_path)
+    local http = require("socket.http")
+    local ltn12 = require("ltn12")
+    local socket = require("socket")
+    local socketutil = require("socketutil")
+
+    local list_url = api:getJoinedPath(server.address, base_path)
+    if list_url:sub(-1) ~= "/" then list_url = list_url .. "/" end
+
+    local sink = {}
+    local data = [[<?xml version="1.0"?><a:propfind xmlns:a="DAV:"><a:prop><a:resourcetype/></a:prop></a:propfind>]]
+
+    socketutil:set_timeout()
+    local request = {
+        url      = list_url,
+        method   = "PROPFIND",
+        headers  = {
+            ["Content-Type"]   = "application/xml",
+            ["Depth"]          = "1",
+            ["Content-Length"] = #data,
+        },
+        user     = server.username,
+        password = server.password,
+        source   = ltn12.source.string(data),
+        sink     = ltn12.sink.table(sink),
+    }
+    local code, _, status = socket.skip(1, http.request(request))
+    socketutil:reset_timeout()
+
+    if not code or code < 200 or code > 299 then
+        logger.warn("Sync: listRemoteSdrFolders failed:", status or code)
+        return nil
+    end
+
+    local res_data = table.concat(sink)
+    local folders = {}
+
+    for item in res_data:gmatch("<[^:]*:response[^>]*>(.-)</[^:]*:response>") do
+        local item_href = item:match("<[^:]*:href[^>]*>(.*)</[^:]*:href>")
+        local is_collection = item:find("<[^:]*:collection[^<]*/>")
+
+        if item_href and is_collection then
+            local decoded = util.urlDecode(item_href):gsub("/$", "")
+            local name = ffiutil.basename(decoded)
+            -- Only include .sdr directories, skip the base folder itself
+            if name:match("%.sdr$") and name ~= "" then
+                table.insert(folders, name)
+            end
+        end
+    end
+
+    return folders
+end
+
+-- Compute LCS length between two strings (byte-level, capped for performance)
+function Sync:lcsLength(s1, s2)
+    local m = math.min(#s1, 80)
+    local n = math.min(#s2, 80)
+    s1, s2 = s1:sub(1, m), s2:sub(1, n)
+
+    local prev = {}
+    for j = 0, n do prev[j] = 0 end
+    for i = 1, m do
+        local curr = { [0] = 0 }
+        for j = 1, n do
+            if s1:sub(i, i) == s2:sub(j, j) then
+                curr[j] = prev[j - 1] + 1
+            else
+                curr[j] = math.max(prev[j], curr[j - 1])
+            end
+        end
+        prev = curr
+    end
+    return prev[n]
+end
+
+-- Score how well a remote .sdr folder name matches the local book filename (0–100)
+function Sync:scoreMatch(remote_sdr_name, local_filename)
+    local r = remote_sdr_name:gsub("%.sdr$", ""):lower()
+    local l = (local_filename:match("^(.+)%.[^.]+$") or local_filename):lower()
+    if r == l then return 100 end
+    local lcs = self:lcsLength(r, l)
+    return math.floor(lcs / math.max(#r, #l) * 100)
+end
+
+function Sync:download(cache_manager, server, book_path, callback, force, progress_callback, remote_subdir_override)
     if not server or not book_path then return end
 
     local api = self:getApi(server)
     local paths = self:getLocalPaths(cache_manager, book_path)
     local remote_base = server.url
-    local remote_book_dir = self:joinPath(remote_base, paths.remote_subdir)
+    local remote_book_dir = self:joinPath(remote_base, remote_subdir_override or paths.remote_subdir)
     local remote_analysis_dir = self:joinPath(remote_book_dir, "xray_analysis")
     
     local success_count = 0

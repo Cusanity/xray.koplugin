@@ -1073,6 +1073,21 @@ function XRayPlugin:getXRaySubMenuItems()
                 end,
             },
             {
+                text_func = function()
+                    local book_path = self:getBookPath()
+                    local override = book_path and self:getRemoteSubdirOverride(book_path)
+                    if override then
+                        return self.loc:t("menu_match_remote") .. " ✓"
+                    end
+                    return self.loc:t("menu_match_remote")
+                end,
+                enabled_func = function() return self.settings.sync_server ~= nil end,
+                keep_menu_open = true,
+                callback = function()
+                    self:showRemoteMatchPicker()
+                end,
+            },
+            {
                text = self.loc:t("menu_upload_xray"),
                enabled_func = function() return self.settings.sync_server ~= nil end,
                callback = function()
@@ -1581,6 +1596,94 @@ function XRayPlugin:uploadXRayData()
     end
 end
 
+-- Retrieve any manually set remote .sdr folder for this book
+function XRayPlugin.getRemoteSubdirOverride(_, book_path)
+    if not book_path then return nil end
+    local mapping = G_reader_settings:readSetting("xray_remote_mapping") or {}
+    return mapping[book_path]
+end
+
+-- Persist a manual remote .sdr folder mapping for this book
+function XRayPlugin.setRemoteSubdirOverride(_, book_path, sdr_name)
+    if not book_path then return end
+    local mapping = G_reader_settings:readSetting("xray_remote_mapping") or {}
+    mapping[book_path] = sdr_name
+    G_reader_settings:saveSetting("xray_remote_mapping", mapping)
+end
+
+-- Show a picker that lists remote .sdr folders ranked by filename similarity
+function XRayPlugin:showRemoteMatchPicker()
+    if not self.settings.sync_server then return end
+
+    local book_path = self:getBookPath()
+    if not book_path then
+        UIManager:show(InfoMessage:new{ text = self.loc:t("error_no_book_open"), timeout = 3 })
+        return
+    end
+
+    local msg = InfoMessage:new{ text = self.loc:t("matching_remote"), timeout = nil }
+    UIManager:show(msg)
+    UIManager:forceRePaint()
+
+    if not self.sync then self.sync = Sync:new() end
+
+    local server = self.settings.sync_server
+    local api = self.sync:getApi(server)
+    local folders = self.sync:listRemoteSdrFolders(api, server, server.url)
+
+    UIManager:close(msg)
+
+    if not folders or #folders == 0 then
+        UIManager:show(InfoMessage:new{ text = self.loc:t("remote_match_no_folders"), timeout = 4 })
+        return
+    end
+
+    local local_filename = book_path:match("([^/\\]+)$") or ""
+    local current_override = self:getRemoteSubdirOverride(book_path)
+
+    -- Score and sort: best match first
+    local scored = {}
+    for _, name in ipairs(folders) do
+        table.insert(scored, { name = name, score = self.sync:scoreMatch(name, local_filename) })
+    end
+    table.sort(scored, function(a, b) return a.score > b.score end)
+
+    local menu_items = {}
+    for _, entry in ipairs(scored) do
+        local label = string.format("[%d] %s", entry.score, entry.name)
+        if entry.name == current_override then
+            label = label .. " ✓"
+        end
+        table.insert(menu_items, {
+            text = label,
+            callback = function()
+                UIManager:close(self._remote_match_menu)
+                self._remote_match_menu = nil
+                self:setRemoteSubdirOverride(book_path, entry.name)
+                UIManager:show(InfoMessage:new{
+                    text = string.format(self.loc:t("remote_match_set"), entry.name),
+                    timeout = 3,
+                })
+            end,
+        })
+    end
+
+    self._remote_match_menu = Menu:new{
+        title = self.loc:t("remote_match_title"),
+        item_table = menu_items,
+        is_borderless = true,
+        is_popout = false,
+        width = Screen:getWidth(),
+        height = Screen:getHeight(),
+        onMenuHold = function() end,
+        close_callback = function()
+            UIManager:close(self._remote_match_menu)
+            self._remote_match_menu = nil
+        end,
+    }
+    UIManager:show(self._remote_match_menu)
+end
+
 function XRayPlugin:downloadXRayData(force_download)
     -- force_download: if true, it means triggered from menu, so we want to potentially overwrite/clear
     -- if nil/false, it means triggered by gesture/auto, so we want to be safe (skip if exists)
@@ -1603,6 +1706,7 @@ function XRayPlugin:downloadXRayData(force_download)
 
         local book_path = self:getBookPath()
         if book_path then
+            local override = self:getRemoteSubdirOverride(book_path)
             self.sync:download(
                 self.cache_manager,
                 self.settings.sync_server,
@@ -1653,7 +1757,8 @@ function XRayPlugin:downloadXRayData(force_download)
                 else
                     pd:reportProgress(current)
                 end
-                end
+                end,
+                override
             )
         else
             UIManager:close(msg)

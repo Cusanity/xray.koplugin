@@ -116,6 +116,21 @@ msgstr "上傳 X-Ray 資料"
 msgid "menu_download_xray"
 msgstr "下載 X-Ray 資料"
 
+msgid "menu_match_remote"
+msgstr "匹配遠端資料..."
+
+msgid "matching_remote"
+msgstr "正在列出遠端資料..."
+
+msgid "remote_match_title"
+msgstr "選擇遠端 X-Ray 資料"
+
+msgid "remote_match_no_folders"
+msgstr "伺服器上未找到 .sdr 資料夾"
+
+msgid "remote_match_set"
+msgstr "遠端資料已匹配：%s"
+
 msgid "upload_warn"
 msgstr "這將用本機 X-Ray 資料覆蓋伺服器上的檔案。\n確定繼續嗎？"
 

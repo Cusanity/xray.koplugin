@@ -116,6 +116,21 @@ msgstr "Upload X-Ray Data"
 msgid "menu_download_xray"
 msgstr "Download X-Ray Data"
 
+msgid "menu_match_remote"
+msgstr "Match Remote Data..."
+
+msgid "matching_remote"
+msgstr "Listing remote data..."
+
+msgid "remote_match_title"
+msgstr "Select Remote X-Ray Data"
+
+msgid "remote_match_no_folders"
+msgstr "No .sdr folders found on server"
+
+msgid "remote_match_set"
+msgstr "Remote data matched: %s"
+
 msgid "upload_warn"
 msgstr "This will overwrite the file on the server with your local X-Ray data.\nContinue?"
 
