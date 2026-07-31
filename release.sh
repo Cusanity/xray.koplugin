@@ -26,6 +26,7 @@ echo
 bold "=== xray.koplugin Release Helper ==="
 echo
 echo "  HEAD : $HEAD_COMMIT  —  $HEAD_MSG"
+echo "  Note : GitHub release notes start with this commit message, then append installation docs"
 echo
 
 # Fetch latest release info

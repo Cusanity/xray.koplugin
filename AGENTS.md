@@ -49,6 +49,10 @@ hardcoded fallback table for strings that might be needed before the `.po` is lo
   with `self.loc:t("your_key")` in the Lua code.
 - The fallback table in `localization_xray.lua` should be updated too, but the `.po` file is
   canonical.
+- **Never concatenate a non-ASCII string literal with `self.loc:t()`.**  Patterns like
+  `"\u2713 " .. self.loc:t("key")` produce partially-translated strings that `check_i18n.py`
+  will flag.  Put the whole visible string (including any symbol prefix/suffix) into a
+  dedicated translation key instead: `self.loc:t("key_on")` vs `self.loc:t("key_off")`.
 
 ### GUI i18n (Python tooling, `generator_gui.py`)
 
@@ -122,6 +126,21 @@ Rules:
   **Run this whenever `generator_gui.py` or `gui_i18n.py` is touched.**
 - **Sync test**: generate data with Python tooling, push/sync into KOReader, then confirm
   `xray_data.json` is loaded and visible as expected in plugin UI.
+
+## Release note contract (GitHub Releases)
+
+The release body is generated in `.github/workflows/release.yml` (step: **Build release notes**)
+and the static install section lives in `.github/release_notes_installation.md`.
+
+When editing release notes, keep this structure:
+- First block: commit-derived content (`git log -1 --pretty=%B`) under a clear changelog heading.
+- Second block: hardcoded installation content (Quick Start + detailed instructions).
+
+Formatting guidance for GitHub markdown:
+- Prefer headings, short bullet lists, fenced code blocks, and `<details>` sections for long docs.
+- Keep the top section concise (high signal first), with deep install details collapsed.
+- Keep asset names/version references generated from workflow variables, not hardcoded literals.
+- Put long, static release markdown in `.github/release_notes_installation.md` rather than inline shell heredocs.
 
 ## Change checklist for agents
 

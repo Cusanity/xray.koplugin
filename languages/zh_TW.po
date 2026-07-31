@@ -1001,3 +1001,21 @@ msgstr "閱讀進度"
 
 msgid "menu_full_analysis"
 msgstr "全文模式"
+
+msgid "filter_current_page_on"
+msgstr "✓ 當前頁"
+
+msgid "filter_current_page_off"
+msgstr "☐ 當前頁"
+
+msgid "no_entities_on_page"
+msgstr "當前頁面未找到相關內容。"
+
+msgid "menu_match_remote_active"
+msgstr "匹配遠端資料... ✓"
+
+msgid "author_birth"
+msgstr "生"
+
+msgid "author_death"
+msgstr "卒"

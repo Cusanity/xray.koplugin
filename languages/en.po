@@ -1002,3 +1002,21 @@ msgstr "Reading Progress"
 
 msgid "menu_full_analysis"
 msgstr "Full Text Mode"
+
+msgid "filter_current_page_on"
+msgstr "✓ Current Page"
+
+msgid "filter_current_page_off"
+msgstr "☐ Current Page"
+
+msgid "no_entities_on_page"
+msgstr "No items found on current page."
+
+msgid "menu_match_remote_active"
+msgstr "Match Remote Data... ✓"
+
+msgid "author_birth"
+msgstr "Born"
+
+msgid "author_death"
+msgstr "Died"

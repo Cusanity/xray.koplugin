@@ -536,7 +536,7 @@ function XRayPlugin:onReaderReady()
 end
 
 function XRayPlugin:onShowXRayCharacters()
-    self:showCharacters()
+    self:showCharacters(true)
     return true
 end
 
@@ -546,22 +546,22 @@ function XRayPlugin:onShowXRayChapterCharacters()
 end
 
 function XRayPlugin:onShowXRayTimeline()
-    self:showTimeline()
+    self:showTimeline(true)
     return true
 end
 
 function XRayPlugin:onShowXRayHistorical()
-    self:showHistoricalFigures()
+    self:showHistoricalFigures(true)
     return true
 end
 
 function XRayPlugin:onShowXRayThemes()
-    self:showThemes()
+    self:showThemes(true)
     return true
 end
 
 function XRayPlugin:onShowXRayLocations()
-    self:showLocations()
+    self:showLocations(true)
     return true
 end
 
@@ -738,6 +738,60 @@ function XRayPlugin:matchXRayEntity(selected_text)
 
     logger.info("XRayPlugin: No match found for:", normalized)
     return nil, nil  -- No match found
+end
+
+-- Get the visible text of the current page
+function XRayPlugin:getCurrentPageText()
+    if not self.ui or not self.ui.document then return "" end
+    local doc = self.ui.document
+
+    -- EPUB / CRE (rolling): extract text between current-page and next-page xpointers
+    if self.ui.rolling then
+        local ok1, xp_start = pcall(function() return doc:getXPointer() end)
+        if not ok1 or not xp_start then return "" end
+        local current_page = doc:getCurrentPage()
+        local ok2, xp_end = pcall(function() return doc:getPageXPointer(current_page + 1) end)
+        if not ok2 or not xp_end then return "" end
+        local ok3, text = pcall(function() return doc:getTextFromXPointers(xp_start, xp_end) end)
+        if ok3 and type(text) == "string" then return text end
+        return ""
+    end
+
+    -- Paged docs (PDF, DjVu): use generic getPageText
+    if self.ui.paging then
+        local current_page = doc:getCurrentPage()
+        local ok, text = pcall(function() return doc:getPageText(current_page) end)
+        if ok and type(text) == "string" then return text end
+        if ok and type(text) == "table" then
+            local parts = {}
+            for _, box in ipairs(text) do
+                if type(box) == "table" and box.word then
+                    table.insert(parts, box.word)
+                elseif type(box) == "string" then
+                    table.insert(parts, box)
+                end
+            end
+            return table.concat(parts, " ")
+        end
+        return ""
+    end
+
+    return ""
+end
+
+-- Check whether an entity's name or any alias appears in page_text
+function XRayPlugin.isEntityOnPage(_, entity, page_text)
+    if not page_text or page_text == "" or not entity then return false end
+    local text_lower = page_text:lower()
+    local name = (entity.name or entity.term or ""):lower()
+    if name ~= "" and text_lower:find(name, 1, true) then return true end
+    if entity.aliases then
+        for _, alias in ipairs(entity.aliases) do
+            local a = (alias or ""):lower()
+            if a ~= "" and text_lower:find(a, 1, true) then return true end
+        end
+    end
+    return false
 end
 
 -- Helper to check if text matches an entity name
@@ -951,7 +1005,7 @@ function XRayPlugin:getXRaySubMenuItems()
                     counts.characters > 0 and (" (" .. counts.characters .. ")") or ""
                 ),
                 callback = function()
-                    self:showCharacters()
+                    self:showCharacters(true)
                 end,
             })
         end
@@ -978,7 +1032,7 @@ function XRayPlugin:getXRaySubMenuItems()
             table.insert(items, {
                 text = self.loc:t("menu_timeline") .. (counts.timeline > 0 and " (" .. counts.timeline .. ")" or ""),
                 callback = function()
-                    self:showTimeline()
+                    self:showTimeline(true)
                 end,
             })
         end
@@ -991,7 +1045,7 @@ function XRayPlugin:getXRaySubMenuItems()
                     counts.historical_figures > 0 and (" (" .. counts.historical_figures .. ")") or ""
                 ),
                 callback = function()
-                    self:showHistoricalFigures()
+                    self:showHistoricalFigures(true)
                 end,
             })
         end
@@ -1000,7 +1054,7 @@ function XRayPlugin:getXRaySubMenuItems()
             table.insert(items, {
                 text = self.loc:t("menu_locations") .. (counts.locations > 0 and " (" .. counts.locations .. ")" or ""),
                 callback = function()
-                    self:showLocations()
+                    self:showLocations(true)
                 end,
             })
         end
@@ -1027,7 +1081,7 @@ function XRayPlugin:getXRaySubMenuItems()
             table.insert(items, {
                 text = self.loc:t("menu_themes") .. (counts.themes > 0 and " (" .. counts.themes .. ")" or ""),
                 callback = function()
-                    self:showThemes()
+                    self:showThemes(true)
                 end,
             })
         end
@@ -1077,7 +1131,7 @@ function XRayPlugin:getXRaySubMenuItems()
                     local book_path = self:getBookPath()
                     local override = book_path and self:getRemoteSubdirOverride(book_path)
                     if override then
-                        return self.loc:t("menu_match_remote") .. " ✓"
+                        return self.loc:t("menu_match_remote_active")
                     end
                     return self.loc:t("menu_match_remote")
                 end,
@@ -1270,7 +1324,7 @@ function XRayPlugin:closeAllMenus()
     end
 end
 
-function XRayPlugin:showCharacters()
+function XRayPlugin:showCharacters(filter_to_page)
     if not self.characters or #self.characters == 0 then
         UIManager:show(InfoMessage:new{
             text = self.loc:t("no_character_data"),
@@ -1279,7 +1333,20 @@ function XRayPlugin:showCharacters()
         return
     end
 
+    local page_text = filter_to_page and self:getCurrentPageText() or nil
     local items = {}
+
+    -- Page filter toggle
+    table.insert(items, {
+        text = self.loc:t(filter_to_page and "filter_current_page_on" or "filter_current_page_off"),
+        callback = function()
+            if self.characters_menu then
+                UIManager:close(self.characters_menu)
+                self.characters_menu = nil
+            end
+            self:showCharacters(not filter_to_page)
+        end,
+    })
 
     -- Add search option
     table.insert(items, {
@@ -1291,29 +1358,26 @@ function XRayPlugin:showCharacters()
 
     -- Add characters
     local progress = self:getReaderProgress()
+    local total_count = 0
 
     for i, char in ipairs(self.characters) do
-        -- Filter by visibility
         if self:isEntityVisible(char, progress) then
-            -- CRITICAL: Ensure char and char.name exist
             if char and type(char) == "table" then
                 local name = char.name
-
-                -- Ensure name is a string
                 if type(name) ~= "string" or name == "" then
                     name = self.loc:t("unknown_character")
                 end
-
                 local text = name
-
-                -- CRITICAL: Ensure text is not nil
                 if text and type(text) == "string" and #text > 0 then
-                    table.insert(items, {
-                        text = text,
-                        callback = function()
-                            self:showCharacterDetails(char)
-                        end
-                    })
+                    total_count = total_count + 1
+                    if not filter_to_page or self:isEntityOnPage(char, page_text) then
+                        table.insert(items, {
+                            text = text,
+                            callback = function()
+                                self:showCharacterDetails(char)
+                            end
+                        })
+                    end
                 else
                     logger.warn("XRayPlugin: Skipping character with invalid text at index", i)
                 end
@@ -1323,20 +1387,21 @@ function XRayPlugin:showCharacters()
         end
     end
 
-    -- Ensure we have items to display (1 is search button)
-    if #items < 2 then
-        -- Only search button
+    -- items[1] = filter toggle, items[2] = search; need at least one character entry
+    if #items < 3 then
         UIManager:show(InfoMessage:new{
-            text = self.loc:t("no_character_data"),
+            text = filter_to_page and self.loc:t("no_entities_on_page") or self.loc:t("no_character_data"),
             timeout = 3,
         })
         return
     end
 
-    -- Create menu items with search option at top
+    local filtered_count = #items - 2
+    local count_str = filter_to_page
+        and " (" .. filtered_count .. "/" .. total_count .. ")"
+        or  " (" .. total_count .. ")"
     self.characters_menu = Menu:new{
-        -- Subtract 1 for search button
-        title = self.loc:t("menu_characters") .. " (" .. (#items - 1) .. ")",
+        title = self.loc:t("menu_characters") .. count_str,
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -1771,7 +1836,7 @@ function XRayPlugin:downloadXRayData(force_download)
     end
 end
 
-function XRayPlugin:showLocations()
+function XRayPlugin:showLocations(filter_to_page)
     -- Filter by reader progress
     local progress = self:getReaderProgress()
 
@@ -1783,23 +1848,51 @@ function XRayPlugin:showLocations()
         return
     end
 
+    local page_text = filter_to_page and self:getCurrentPageText() or nil
     local items = {}
-    for _, loc in ipairs(self.locations) do
-        -- Check visibility
-        if self:isEntityVisible(loc, progress) then
-            local text = loc.name or "Unknown Location"
 
-            table.insert(items, {
-                text = text,
-                callback = function()
-                    self:showLocationDetails(loc)
-                end,
-            })
+    -- Page filter toggle
+    table.insert(items, {
+        text = self.loc:t(filter_to_page and "filter_current_page_on" or "filter_current_page_off"),
+        callback = function()
+            if self.location_menu then
+                UIManager:close(self.location_menu)
+                self.location_menu = nil
+            end
+            self:showLocations(not filter_to_page)
+        end,
+    })
+
+    local total_count = 0
+    for _, loc in ipairs(self.locations) do
+        if self:isEntityVisible(loc, progress) then
+            total_count = total_count + 1
+            if not filter_to_page or self:isEntityOnPage(loc, page_text) then
+                local text = loc.name or "Unknown Location"
+                table.insert(items, {
+                    text = text,
+                    callback = function()
+                        self:showLocationDetails(loc)
+                    end,
+                })
+            end
         end
     end
 
+    -- items[1] = filter toggle; need at least one location entry
+    if #items < 2 then
+        UIManager:show(InfoMessage:new{
+            text = filter_to_page and self.loc:t("no_entities_on_page") or self.loc:t("no_location_data"),
+            timeout = 3,
+        })
+        return
+    end
+
+    local count_str = filter_to_page
+        and " (" .. (#items - 1) .. "/" .. total_count .. ")"
+        or  " (" .. total_count .. ")"
     self.location_menu = Menu:new{
-        title = self.loc:t("menu_locations") .. " (" .. #items .. ")",
+        title = self.loc:t("menu_locations") .. count_str,
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2147,7 +2240,7 @@ function XRayPlugin:showSummary()
     self:showNativeDetails(title, description, metadata)
 end
 
-function XRayPlugin:showThemes()
+function XRayPlugin:showThemes(filter_to_page)
     if not self.themes or #self.themes == 0 then
         UIManager:show(InfoMessage:new{
             text = self.loc:t("no_theme_data"),
@@ -2158,25 +2251,54 @@ function XRayPlugin:showThemes()
 
     -- Filter by reader progress
     local progress = self:getReaderProgress()
+    local page_text = filter_to_page and self:getCurrentPageText() or nil
 
     local items = {}
+
+    -- Page filter toggle
+    table.insert(items, {
+        text = self.loc:t(filter_to_page and "filter_current_page_on" or "filter_current_page_off"),
+        callback = function()
+            if self.theme_menu then
+                UIManager:close(self.theme_menu)
+                self.theme_menu = nil
+            end
+            self:showThemes(not filter_to_page)
+        end,
+    })
+
+    local total_count = 0
     for _, theme in ipairs(self.themes) do
-        -- Support both string themes and object themes
         local theme_name = type(theme) == "table" and (theme.term or theme.name) or theme
         local theme_obj = type(theme) == "table" and theme or {name = theme}
 
         if self:isEntityVisible(theme_obj, progress) then
-            table.insert(items, {
-                text = theme_name,
-                callback = function()
-                    self:showThemeDetails(theme_obj)
-                end,
-            })
+            total_count = total_count + 1
+            if not filter_to_page or self:isEntityOnPage(theme_obj, page_text) then
+                table.insert(items, {
+                    text = theme_name,
+                    callback = function()
+                        self:showThemeDetails(theme_obj)
+                    end,
+                })
+            end
         end
     end
 
+    -- items[1] = filter toggle; need at least one theme entry
+    if #items < 2 then
+        UIManager:show(InfoMessage:new{
+            text = filter_to_page and self.loc:t("no_entities_on_page") or self.loc:t("no_theme_data"),
+            timeout = 3,
+        })
+        return
+    end
+
+    local count_str = filter_to_page
+        and " (" .. (#items - 1) .. "/" .. total_count .. ")"
+        or  " (" .. total_count .. ")"
     self.theme_menu = Menu:new{
-        title = self.loc:t("menu_themes") .. " (" .. #items .. ")",
+        title = self.loc:t("menu_themes") .. count_str,
         item_table = items,
         is_popout = false,
         title_bar_fm_style = true,
@@ -2208,7 +2330,7 @@ function XRayPlugin:showThemeDetails(theme)
 end
 
 
-function XRayPlugin:showTimeline()
+function XRayPlugin:showTimeline(filter_to_page)
     if not self.timeline or #self.timeline == 0 then
         UIManager:show(InfoMessage:new{
             text = self.loc:t("no_timeline_data"),
@@ -2217,111 +2339,159 @@ function XRayPlugin:showTimeline()
         return
     end
 
+    local page_text = filter_to_page and self:getCurrentPageText() or nil
     local items = {}
 
     local progress = self:getReaderProgress()
+    local total_count = 0
+
+    -- Page filter toggle
+    table.insert(items, {
+        text = self.loc:t(filter_to_page and "filter_current_page_on" or "filter_current_page_off"),
+        callback = function()
+            if self.timeline_menu then
+                UIManager:close(self.timeline_menu)
+                self.timeline_menu = nil
+            end
+            self:showTimeline(not filter_to_page)
+        end,
+    })
 
     for i, event in ipairs(self.timeline) do
-        -- Filter by reader progress
         if self:isEntityVisible(event, progress) then
-            local event_text = event.event or "Event"
-            -- Strip legacy duplicate-name prefix: old data was built as
-            -- char_name..event_text so the name appears twice in a row.
-            local char = event.character or ""
-            if char ~= "" and event_text:sub(1, #char) == char then
-                event_text = event_text:sub(#char + 1)
-            end
-            local text = char ~= "" and (char .. " · " .. event_text) or event_text
-            if event.chapter then
-                text = text .. " (" .. self.loc:t("chapter") .. " " .. event.chapter .. ")"
+            total_count = total_count + 1
+            -- When page filter is active, check if any involved character appears on page
+            local on_page = true
+            if filter_to_page and page_text then
+                on_page = false
+                local text_lower = page_text:lower()
+                local char = event.character or ""
+                if char ~= "" and text_lower:find(char:lower(), 1, true) then
+                    on_page = true
+                end
+                if not on_page and event.characters then
+                    for _, cn in ipairs(event.characters) do
+                        local c = (cn or ""):lower()
+                        if c ~= "" and text_lower:find(c, 1, true) then
+                            on_page = true
+                            break
+                        end
+                    end
+                end
             end
 
-            table.insert(items, {
-            text = text,
-            callback = function()
-                -- Navigation priority:
-                -- 1. anchor + findText → exact xpointer (best precision)
-                -- 2. xref DocFragment page interpolation (chapter-level precision)
-                -- 3. GotoPercent fallback (legacy / PDF)
-                if event.anchor and event.xref and self.ui.rolling then
-                    local frag_n = event.xref.spine + 1
-                    local frag_xp = frag_n == 1
-                        and "/body/DocFragment"
-                        or ("/body/DocFragment[" .. frag_n .. "]")
-                    local start_page = self.ui.document:getPageFromXPointer(frag_xp)
-                    if start_page and start_page > 0 then
-                        -- Seed CRE's internal cursor to the chapter start before searching.
-                        -- findText's `page` param is dropped by the Lua wrapper and never
-                        -- reaches native CRE; only the internal cursor position matters.
-                        -- Without this, origin=0 searches from the current reading page,
-                        -- which can match a completely different part of the book.
-                        self.ui.document:gotoPage(start_page)
-                        local hits = self.ui.document:findText(
-                            event.anchor, 0, 0, true, start_page, false, 1, 0x0000
-                        )
-                        if hits and hits[1] then
+            if on_page then
+                local event_text = event.event or "Event"
+                -- Strip legacy duplicate-name prefix: old data was built as
+                -- char_name..event_text so the name appears twice in a row.
+                local char = event.character or ""
+                if char ~= "" and event_text:sub(1, #char) == char then
+                    event_text = event_text:sub(#char + 1)
+                end
+                local text = char ~= "" and (char .. " · " .. event_text) or event_text
+                if event.chapter then
+                    text = text .. " (" .. self.loc:t("chapter") .. " " .. event.chapter .. ")"
+                end
+
+                table.insert(items, {
+                text = text,
+                callback = function()
+                    -- Navigation priority:
+                    -- 1. anchor + findText → exact xpointer (best precision)
+                    -- 2. xref DocFragment page interpolation (chapter-level precision)
+                    -- 3. GotoPercent fallback (legacy / PDF)
+                    if event.anchor and event.xref and self.ui.rolling then
+                        local frag_n = event.xref.spine + 1
+                        local frag_xp = frag_n == 1
+                            and "/body/DocFragment"
+                            or ("/body/DocFragment[" .. frag_n .. "]")
+                        local start_page = self.ui.document:getPageFromXPointer(frag_xp)
+                        if start_page and start_page > 0 then
+                            -- Seed CRE's internal cursor to the chapter start before searching.
+                            -- findText's `page` param is dropped by the Lua wrapper and never
+                            -- reaches native CRE; only the internal cursor position matters.
+                            -- Without this, origin=0 searches from the current reading page,
+                            -- which can match a completely different part of the book.
+                            self.ui.document:gotoPage(start_page)
+                            local hits = self.ui.document:findText(
+                                event.anchor, 0, 0, true, start_page, false, 1, 0x0000
+                            )
+                            if hits and hits[1] then
+                                self:closeAllMenus()
+                                self.ui.link:addCurrentLocationToStack()
+                                self.ui:handleEvent(Event:new("GotoXPointer", hits[1]["start"]))
+                                return true
+                            end
+                        end
+                        -- findText missed (e.g. t/s conversion mismatch); fall through
+                    end
+                    if event.xref and self.ui.rolling then
+                        -- Precise navigation via DocFragment page boundaries.
+                        -- spine is 0-based; CREngine DocFragment is 1-based.
+                        -- DocFragment[1] is written without an index qualifier in xpointers.
+                        local frag_n = event.xref.spine + 1
+                        local frag_xp = frag_n == 1
+                            and "/body/DocFragment"
+                            or ("/body/DocFragment[" .. frag_n .. "]")
+                        local next_xp = "/body/DocFragment[" .. (frag_n + 1) .. "]"
+                        local doc = self.ui.document
+                        local chap_start = doc:getPageFromXPointer(frag_xp)
+                        if chap_start and chap_start > 0 then
+                            local chap_end = doc:getPageFromXPointer(next_xp)
+                            if not chap_end or chap_end <= chap_start then
+                                chap_end = doc:getPageCount() + 1
+                            end
+                            local chapter_pages = math.max(1, chap_end - chap_start)
+                            local ratio = (event.xref.chapter_len or 0) > 0
+                                and (event.xref.offset / event.xref.chapter_len)
+                                or 0
+                            local target_page = chap_start + math.floor(ratio * chapter_pages)
                             self:closeAllMenus()
                             self.ui.link:addCurrentLocationToStack()
-                            self.ui:handleEvent(Event:new("GotoXPointer", hits[1]["start"]))
+                            self.ui:handleEvent(Event:new("GotoPage", target_page))
                             return true
                         end
+                        -- DocFragment lookup failed; show details as fallback
                     end
-                    -- findText missed (e.g. t/s conversion mismatch); fall through
-                end
-                if event.xref and self.ui.rolling then
-                    -- Precise navigation via DocFragment page boundaries.
-                    -- spine is 0-based; CREngine DocFragment is 1-based.
-                    -- DocFragment[1] is written without an index qualifier in xpointers.
-                    local frag_n = event.xref.spine + 1
-                    local frag_xp = frag_n == 1
-                        and "/body/DocFragment"
-                        or ("/body/DocFragment[" .. frag_n .. "]")
-                    local next_xp = "/body/DocFragment[" .. (frag_n + 1) .. "]"
-                    local doc = self.ui.document
-                    local chap_start = doc:getPageFromXPointer(frag_xp)
-                    if chap_start and chap_start > 0 then
-                        local chap_end = doc:getPageFromXPointer(next_xp)
-                        if not chap_end or chap_end <= chap_start then
-                            chap_end = doc:getPageCount() + 1
-                        end
-                        local chapter_pages = math.max(1, chap_end - chap_start)
-                        local ratio = (event.xref.chapter_len or 0) > 0
-                            and (event.xref.offset / event.xref.chapter_len)
-                            or 0
-                        local target_page = chap_start + math.floor(ratio * chapter_pages)
-                        self:closeAllMenus()
-                        self.ui.link:addCurrentLocationToStack()
-                        self.ui:handleEvent(Event:new("GotoPage", target_page))
-                        return true
+                    -- No xref or lookup failed — show event details
+                    local title = string.format(self.loc:t("timeline_event"), i)
+                    local description = event.event or ""
+                    local metadata = {}
+
+                    if event.chapter then
+                        table.insert(metadata, self.loc:t("chapter") .. ": " .. event.chapter)
                     end
-                    -- DocFragment lookup failed; show details as fallback
-                end
-                -- No xref or lookup failed — show event details
-                local title = string.format(self.loc:t("timeline_event"), i)
-                local description = event.event or ""
-                local metadata = {}
 
-                if event.chapter then
-                    table.insert(metadata, self.loc:t("chapter") .. ": " .. event.chapter)
-                end
+                    if event.importance then
+                        table.insert(metadata, (self.loc:t("importance")) .. ": " .. event.importance)
+                    end
 
-                if event.importance then
-                    table.insert(metadata, (self.loc:t("importance")) .. ": " .. event.importance)
-                end
+                    if event.characters and #event.characters > 0 then
+                        local chars_str = table.concat(event.characters, ", ")
+                        table.insert(metadata, self.loc:t("characters_involved") .. ": " .. chars_str)
+                    end
 
-                if event.characters and #event.characters > 0 then
-                    local chars_str = table.concat(event.characters, ", ")
-                    table.insert(metadata, self.loc:t("characters_involved") .. ": " .. chars_str)
-                end
-
-                self:showNativeDetails(title, description, metadata)
-            end,
-        })
-        end -- Close filtering if
+                    self:showNativeDetails(title, description, metadata)
+                end,
+            })
+            end -- on_page check
+        end -- isEntityVisible check
     end
 
+    -- items[1] = filter toggle; need at least one event entry
+    if #items < 2 then
+        UIManager:show(InfoMessage:new{
+            text = filter_to_page and self.loc:t("no_entities_on_page") or self.loc:t("no_timeline_data"),
+            timeout = 3,
+        })
+        return
+    end
+
+    local count_str = filter_to_page
+        and " (" .. (#items - 1) .. "/" .. total_count .. ")"
+        or  " (" .. total_count .. ")"
     self.timeline_menu = Menu:new{
-        title = self.loc:t("menu_timeline") .. " (" .. #items .. ")",
+        title = self.loc:t("menu_timeline") .. count_str,
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2333,7 +2503,7 @@ function XRayPlugin:showTimeline()
     UIManager:show(self.timeline_menu)
 end
 
-function XRayPlugin:showHistoricalFigures()
+function XRayPlugin:showHistoricalFigures(filter_to_page)
     if not self.historical_figures or #self.historical_figures == 0 then
         UIManager:show(InfoMessage:new{
             text = self.loc:t("no_historical_data"),
@@ -2344,26 +2514,55 @@ function XRayPlugin:showHistoricalFigures()
 
     -- Filter by reader progress
     local progress = self:getReaderProgress()
+    local page_text = filter_to_page and self:getCurrentPageText() or nil
 
     local items = {}
+    local total_count = 0
+
+    -- Page filter toggle
+    table.insert(items, {
+        text = self.loc:t(filter_to_page and "filter_current_page_on" or "filter_current_page_off"),
+        callback = function()
+            if self.historical_menu then
+                UIManager:close(self.historical_menu)
+                self.historical_menu = nil
+            end
+            self:showHistoricalFigures(not filter_to_page)
+        end,
+    })
+
     for _, figure in ipairs(self.historical_figures) do
         if self:isEntityVisible(figure, progress) then
-            local text = figure.name or "Unknown"
-            if figure.role then
-                text = text .. " (" .. figure.role .. ")"
+            total_count = total_count + 1
+            if not filter_to_page or self:isEntityOnPage(figure, page_text) then
+                local text = figure.name or "Unknown"
+                if figure.role then
+                    text = text .. " (" .. figure.role .. ")"
+                end
+                table.insert(items, {
+                    text = text,
+                    callback = function()
+                        self:showHistoricalFigureDetails(figure)
+                    end,
+                })
             end
-
-            table.insert(items, {
-                text = text,
-                callback = function()
-                    self:showHistoricalFigureDetails(figure)
-                end,
-            })
         end
     end
 
+    -- items[1] = filter toggle; need at least one figure entry
+    if #items < 2 then
+        UIManager:show(InfoMessage:new{
+            text = filter_to_page and self.loc:t("no_entities_on_page") or self.loc:t("no_historical_data"),
+            timeout = 3,
+        })
+        return
+    end
+
+    local count_str = filter_to_page
+        and " (" .. (#items - 1) .. "/" .. total_count .. ")"
+        or  " (" .. total_count .. ")"
     self.historical_menu = Menu:new{
-        title = self.loc:t("menu_historical_figures") .. " (" .. #items .. ")",
+        title = self.loc:t("menu_historical_figures") .. count_str,
         item_table = items,
         -- is_borderless = true,
         is_popout = false,
@@ -2679,7 +2878,7 @@ function XRayPlugin:showQuickXRayMenu()
                 text = self.loc:t("menu_characters"),
                 callback = function()
                     UIManager:close(self.quick_dialog)
-                    self:showCharacters()
+                    self:showCharacters(true)
                 end,
             },
         })
@@ -2699,7 +2898,7 @@ function XRayPlugin:showQuickXRayMenu()
                 text = self.loc:t("menu_timeline"),
                 callback = function()
                     UIManager:close(self.quick_dialog)
-                    self:showTimeline()
+                    self:showTimeline(true)
                 end,
             },
         })
@@ -2709,7 +2908,7 @@ function XRayPlugin:showQuickXRayMenu()
                 text = self.loc:t("menu_historical_figures"),
                 callback = function()
                     UIManager:close(self.quick_dialog)
-                    self:showHistoricalFigures()
+                    self:showHistoricalFigures(true)
                 end,
             },
         })

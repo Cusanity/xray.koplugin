@@ -73,12 +73,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - uses: actions/checkout@v4
+
       - uses: actions/download-artifact@v4
         with:
           path: artifacts      # downloads all artifacts into artifacts/<name>/
 
       - name: List artifacts
         run: find artifacts -type f
+
+      - name: Build release notes
+        run: |
+          VERSION="${{ needs.build-plugin.outputs.version }}"
+          ASSET_NAME="xray.koplugin-${VERSION}.zip"
+          COMMIT_SHA=$(git rev-parse --short HEAD)
+          COMMIT_SUBJECT=$(git log -1 --pretty=%s)
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          {
+            printf '# X-Ray Plugin %s\n\n' "$VERSION"
+            printf '> Commit: `%s`  \n' "$COMMIT_SHA"
+            printf '> Subject: %s\n\n' "$COMMIT_SUBJECT"
+            printf '## What\x27s Changed\n\n'
+            if [[ -n "$COMMIT_MSG" ]]; then
+              printf '%s\n\n' "$COMMIT_MSG"
+            else
+              printf '(No commit message provided.)\n\n'
+            fi
+          } > release_notes.md
+
+          sed "s/ASSET_PLACEHOLDER/${ASSET_NAME}/g" .github/release_notes_installation.md >> release_notes.md
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
@@ -89,48 +112,4 @@ jobs:
           prerelease: ${{ contains(needs.build-plugin.outputs.version, '-') }}
           files: |
             artifacts/plugin-zip/xray.koplugin-*.zip
-          body: |
-            ## 安装说明 / Installation
-
-            ### KOReader 插件（设备端）
-            1. 下载 `xray.koplugin-*.zip`
-            2. 解压到 `koreader/plugins/`，解压后目录结构如下：
-               ```
-               koreader/plugins/
-               └── xray.koplugin/
-                   ├── _meta.lua
-                   ├── cachemanager.lua
-                   ├── chapteranalyzer.lua
-                   ├── characternotes.lua
-                   ├── localization_xray.lua
-                   ├── main.lua
-                   ├── sync.lua
-                   ├── xray_receiver.lua
-                   ├── LICENSE
-                   └── languages/
-               ```
-            3. 重启 KOReader
-
-            ### 电脑端生成器（从源码运行）
-
-            ```bash
-            git clone https://github.com/Cusanity/xray.koplugin.git
-            cd xray.koplugin
-            python -m venv .venv
-            # Windows Git Bash:
-            source .venv/Scripts/activate
-            pip install -r requirements.txt
-            python generator_gui.py
-            ```
-
-            Linux/macOS 激活虚拟环境：
-
-            ```bash
-            source .venv/bin/activate
-            ```
-
-            Windows PowerShell 激活虚拟环境：
-
-            ```powershell
-            .\.venv\Scripts\Activate.ps1
-            ```
+          body_path: release_notes.md
