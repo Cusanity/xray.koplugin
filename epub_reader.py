@@ -6,8 +6,11 @@ Handles extracting chapters, metadata, and text content from EPUB files.
 
 from __future__ import annotations
 
+import html as _html_mod
 import os
 import re
+import shutil
+import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -303,3 +306,256 @@ class EpubReader:
             full_text = "\n".join([text for _, text in chapters])
             return full_text, book_title, author
         return None, None, None
+
+
+# ---------------------------------------------------------------------------
+# EPUB TOC rebuild
+# ---------------------------------------------------------------------------
+
+def _is_toc_page(html_text: str) -> bool:
+    """Return True if html_text looks like an embedded table of contents."""
+    links = re.findall(r'<a\s+href="(?!(?:https?:|mailto:|#))[^"]*"', html_text, re.I)
+    if len(links) < 4:
+        return False
+    if re.search(r'[\u76ee][\u5f55\u6b21\u9304]', html_text):
+        return True
+    if re.search(
+        r'<h[1-6][^>]*>\s*(?:table\s+of\s+contents|contents)\s*</h[1-6]',
+        html_text, re.I,
+    ):
+        return True
+    text_only = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', ' ', html_text)).strip()
+    return len(links) >= 8 and len(links) / max(len(text_only), 1) * 600 > 1
+
+
+def _extract_toc_entries(html_text: str) -> list[tuple[int, str, str]]:
+    """Return (depth, title, href) for internal links in an HTML TOC page."""
+    entries: list[tuple[int, str, str]] = []
+    depth = 0
+    token_re = re.compile(
+        r'<(/?blockquote)[^>]*>|<a\s+href="([^"]*)"[^>]*>(.*?)</a>',
+        re.S | re.I,
+    )
+    for m in token_re.finditer(html_text):
+        if m.group(1):
+            depth = max(0, depth - 1) if m.group(1).startswith('/') else depth + 1
+        elif m.group(2) is not None:
+            href = m.group(2)
+            if href.startswith(('http://', 'https://', 'mailto:', '#')):
+                continue
+            label = re.sub(r'\s+', ' ', re.sub(r'<[^>]+>', '', m.group(3))).strip()
+            if label:
+                entries.append((depth, label, href))
+    return entries
+
+
+def _get_spine_order_epub(tmpdir: str) -> dict[str, int]:
+    """Return {filename: spine_index} from the OPF in the extracted EPUB dir."""
+    import glob
+    opf_files = glob.glob(os.path.join(tmpdir, '**', 'content.opf'), recursive=True)
+    if not opf_files:
+        opf_files = glob.glob(os.path.join(tmpdir, '**', '*.opf'), recursive=True)
+    if not opf_files:
+        return {}
+    with open(opf_files[0], encoding='utf-8') as f:
+        opf_text = f.read()
+    manifest: dict[str, str] = {}
+    for m in re.finditer(r'<item\b[^>]*\bid="([^"]+)"[^>]*\bhref="([^"]+)"', opf_text):
+        manifest[m.group(1)] = m.group(2)
+    for m in re.finditer(r'<item\b[^>]*\bhref="([^"]+)"[^>]*\bid="([^"]+)"', opf_text):
+        manifest[m.group(2)] = m.group(1)
+    spine_ids = re.findall(r'<itemref\s+idref="([^"]+)"', opf_text)
+    return {
+        href.split('/')[-1].split('#')[0]: idx
+        for idx, idref in enumerate(spine_ids)
+        if (href := manifest.get(idref, ''))
+    }
+
+
+def _entries_to_tree_epub(entries, start, min_depth):
+    """Convert flat (depth, title, href) list to a nested tree."""
+    children: list = []
+    i = start
+    while i < len(entries):
+        depth, label, href = entries[i]
+        if depth < min_depth:
+            break
+        if depth == min_depth:
+            grandchildren, i = _entries_to_tree_epub(entries, i + 1, min_depth + 1)
+            children.append((label, href, grandchildren))
+        else:
+            i += 1
+    return children, i
+
+
+def _render_navpoints_epub(tree: list, counter: list[int], indent: int) -> str:
+    xml = ''
+    pad = '  ' * indent
+    for label, href, children in tree:
+        counter[0] += 1
+        po = counter[0]
+        xml += (
+            f'{pad}<navPoint class="chapter" id="np_{po}" playOrder="{po}">\n'
+            f'{pad}  <navLabel><text>{_html_mod.escape(label)}</text></navLabel>\n'
+            f'{pad}  <content src="{_html_mod.escape(href)}"/>\n'
+        )
+        if children:
+            xml += _render_navpoints_epub(children, counter, indent + 1)
+        xml += f'{pad}</navPoint>\n'
+    return xml
+
+
+def rebuild_toc_ncx(epub_path: str) -> bool:
+    """Rebuild toc.ncx from embedded HTML TOC pages in an EPUB.
+
+    Detects HTML pages that look like tables of contents (via 目录/目次 heading
+    or link density), extracts their chapter links and nesting hierarchy, and
+    rewrites toc.ncx with a proper multi-level navMap. Skips EPUBs whose NCX
+    already has nested navigation entries.
+
+    Returns True if toc.ncx was rewritten with richer content.
+    """
+    if not os.path.exists(epub_path) or not epub_path.lower().endswith('.epub'):
+        return False
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with zipfile.ZipFile(epub_path) as zin:
+            zin.extractall(tmpdir)
+
+        import glob
+        ncx_files = glob.glob(os.path.join(tmpdir, '**', 'toc.ncx'), recursive=True)
+        if not ncx_files:
+            return False
+        ncx_path = ncx_files[0]
+        with open(ncx_path, encoding='utf-8') as f:
+            ncx_text = f.read()
+
+        top_level = re.findall(
+            r'<navPoint[^>]*>\s*<navLabel>\s*<text>(.*?)</text>\s*</navLabel>\s*'
+            r'<content\s+src="([^"]+)"',
+            ncx_text, re.S,
+        )
+        if not top_level:
+            return False
+        if len(re.findall(r'<navPoint\b', ncx_text)) > len(top_level) + 1:
+            return False
+
+        spine_order = _get_spine_order_epub(tmpdir)
+        top_labels = {label for label, _ in top_level}
+
+        html_files = sorted(
+            glob.glob(os.path.join(tmpdir, '**', '*.html'), recursive=True)
+            + glob.glob(os.path.join(tmpdir, '**', '*.xhtml'), recursive=True)
+            + glob.glob(os.path.join(tmpdir, '**', '*.htm'), recursive=True)
+        )
+
+        toc_pages: list[tuple[int, list]] = []
+        for html_path in html_files:
+            try:
+                with open(html_path, encoding='utf-8') as f:
+                    content = f.read()
+            except Exception:
+                continue
+            if not _is_toc_page(content):
+                continue
+            entries = _extract_toc_entries(content)
+            if not entries:
+                continue
+            entry_labels = {e[1] for e in entries}
+            if len(entry_labels & top_labels) / max(len(entry_labels), 1) >= 0.5:
+                continue
+            fname = os.path.basename(html_path)
+            toc_pages.append((spine_order.get(fname, 999999), entries))
+
+        if not toc_pages:
+            return False
+        toc_pages.sort(key=lambda x: x[0])
+
+        top_positions = sorted(
+            [
+                (spine_order.get(src.split('/')[-1].split('#')[0], 999999), label, src)
+                for label, src in top_level
+            ],
+            key=lambda x: x[0],
+        )
+
+        book_toc_map: dict[int, list] = {i: [] for i in range(len(top_positions))}
+        for toc_idx, entries in toc_pages:
+            book_idx = 0
+            for i, (book_start, _, _) in enumerate(top_positions):
+                if toc_idx >= book_start:
+                    book_idx = i
+            book_toc_map[book_idx].append(entries)
+
+        if not any(v for v in book_toc_map.values()):
+            return False
+
+        uid_m = re.search(r'<meta\s+content="([^"]+)"\s+name="dtb:uid"', ncx_text) or \
+                re.search(r'<meta\s+name="dtb:uid"\s+content="([^"]+)"', ncx_text)
+        uid = uid_m.group(1) if uid_m else 'epub-uid'
+        lang_m = re.search(r'xml:lang="([^"]+)"', ncx_text)
+        lang = lang_m.group(1) if lang_m else 'zh'
+        title_m = re.search(r'<docTitle>\s*<text>(.*?)</text>', ncx_text, re.S)
+        title = title_m.group(1).strip() if title_m else 'Untitled'
+
+        counter = [0]
+        navmap_xml = ''
+        max_depth = 1
+        for book_idx, (_, book_label, book_src) in enumerate(top_positions):
+            counter[0] += 1
+            po = counter[0]
+            children_xml = ''
+            for entries in book_toc_map[book_idx]:
+                tree, _ = _entries_to_tree_epub(entries, 0, 0)
+                children_xml += _render_navpoints_epub(tree, counter, indent=3)
+                for depth, _, _ in entries:
+                    max_depth = max(max_depth, depth + 2)
+            navmap_xml += (
+                f'    <navPoint class="chapter" id="np_{po}" playOrder="{po}">\n'
+                f'      <navLabel><text>{_html_mod.escape(book_label)}</text></navLabel>\n'
+                f'      <content src="{_html_mod.escape(book_src)}"/>\n'
+                f'{children_xml}'
+                f'    </navPoint>\n'
+            )
+
+        new_ncx = (
+            "<?xml version='1.0' encoding='utf-8'?>\n"
+            f'<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1"'
+            f' xml:lang="{lang}">\n'
+            '  <head>\n'
+            f'    <meta content="{uid}" name="dtb:uid"/>\n'
+            f'    <meta content="{max_depth}" name="dtb:depth"/>\n'
+            '    <meta content="epub-patcher" name="dtb:generator"/>\n'
+            '    <meta content="0" name="dtb:totalPageCount"/>\n'
+            '    <meta content="0" name="dtb:maxPageNumber"/>\n'
+            '  </head>\n'
+            '  <docTitle>\n'
+            f'    <text>{_html_mod.escape(title)}</text>\n'
+            '  </docTitle>\n'
+            '  <navMap>\n'
+            f'{navmap_xml}'
+            '  </navMap>\n'
+            '</ncx>'
+        )
+        with open(ncx_path, 'w', encoding='utf-8') as f:
+            f.write(new_ncx)
+
+        output_tmp = epub_path + '.toc_tmp'
+        try:
+            mimetype_path = os.path.join(tmpdir, 'mimetype')
+            with zipfile.ZipFile(output_tmp, 'w') as zout:
+                if os.path.exists(mimetype_path):
+                    zout.write(mimetype_path, 'mimetype', compress_type=zipfile.ZIP_STORED)
+                for root, _dirs, files in os.walk(tmpdir):
+                    for fname in sorted(files):
+                        fpath = os.path.join(root, fname)
+                        arcname = os.path.relpath(fpath, tmpdir).replace(os.sep, '/')
+                        if arcname == 'mimetype':
+                            continue
+                        zout.write(fpath, arcname, compress_type=zipfile.ZIP_DEFLATED)
+            shutil.move(output_tmp, epub_path)
+            return True
+        except Exception:
+            if os.path.exists(output_tmp):
+                os.remove(output_tmp)
+            raise

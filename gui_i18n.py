@@ -157,6 +157,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan Library": "扫描书库",
         "Add EPUB…": "添加 EPUB…",
         "Cleanup Ghost Folders": "清理残留文件夹",
+        "Fix EPUB TOC": "修复目录",
         "Filter by title or author…": "按书名或作者筛选…",
         "Title": "书名",
         "Author": "作者",
@@ -324,6 +325,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Add EPUB files": "添加 EPUB 文件",
         "(added file)": "（已添加文件）",
         "Cleanup ghost folders": "清理残留文件夹",
+        "Fixing TOC for {n} book(s)\u2026": "正在修复 {n} 本书的目录…",
+        "Fixed TOC for {n} of {total} book(s).": "已修复 {n}/{total} 本书的目录。",
+        "No TOC changes needed.": "无需修复目录。",
+        "[{book}] TOC fix failed: {error}": "[{book}] 目录修复失败：{error}",
         "Remove book folders on disk that are not registered in Calibre?\n"
         "This deletes files. Continue?":
             "删除磁盘上未在 Calibre 中登记的书籍文件夹？\n此操作会删除文件。是否继续？",
@@ -542,6 +547,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Scan Library": "掃描書庫",
         "Add EPUB…": "新增 EPUB…",
         "Cleanup Ghost Folders": "清理殘留資料夾",
+        "Fix EPUB TOC": "修復目錄",
         "Filter by title or author…": "依書名或作者篩選…",
         "Title": "書名",
         "Author": "作者",
@@ -703,6 +709,10 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Add EPUB files": "新增 EPUB 檔案",
         "(added file)": "（已新增檔案）",
         "Cleanup ghost folders": "清理殘留資料夾",
+        "Fixing TOC for {n} book(s)\u2026": "正在修復 {n} 本書的目錄…",
+        "Fixed TOC for {n} of {total} book(s).": "已修復 {n}/{total} 本書的目錄。",
+        "No TOC changes needed.": "無需修復目錄。",
+        "[{book}] TOC fix failed: {error}": "[{book}] 目錄修復失敗：{error}",
         "Remove book folders on disk that are not registered in Calibre?\n"
         "This deletes files. Continue?":
             "刪除磁碟上未在 Calibre 中登記的書籍資料夾？\n此操作會刪除檔案。是否繼續？",

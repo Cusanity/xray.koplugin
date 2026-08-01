@@ -101,7 +101,7 @@ import generator
 import retry_config
 import webdav_sync
 from retry_config import RetryChain, RetryChainOptions, RetryEntry
-from epub_reader import get_sdr_name
+from epub_reader import get_sdr_name, rebuild_toc_ncx
 from gui_i18n import AVAILABLE_LANGUAGES, tr
 
 # =============================================================================
@@ -2028,6 +2028,8 @@ class MainWindow(QMainWindow):
         add_btn.clicked.connect(self._add_epub)
         cleanup_btn = QPushButton(tr("Cleanup Ghost Folders"))
         cleanup_btn.clicked.connect(self._cleanup_ghosts)
+        fix_toc_btn = QPushButton(tr("Fix EPUB TOC"))
+        fix_toc_btn.clicked.connect(self._fix_epub_toc)
         refresh_all_btn = QPushButton(tr("Refresh All"))
         refresh_all_btn.clicked.connect(self._populate_table)
         self.webdav_refresh_btn = QPushButton(tr("Refresh Selected"))
@@ -2043,6 +2045,7 @@ class MainWindow(QMainWindow):
         top.addWidget(self.scan_btn)
         top.addWidget(add_btn)
         top.addWidget(cleanup_btn)
+        top.addWidget(fix_toc_btn)
         top.addWidget(refresh_all_btn)
         top.addWidget(self.webdav_refresh_btn)
         top.addWidget(self.webdav_auto_refresh_chk)
@@ -3328,6 +3331,38 @@ class MainWindow(QMainWindow):
                 self._extra_books.append(f)
         if files:
             self._populate_table()
+
+    def _fix_epub_toc(self) -> None:
+        paths = self._selected_paths()
+        if not paths:
+            QMessageBox.information(
+                self, tr("No selection"), tr("Select one or more books in the table first.")
+            )
+            return
+        self.statusBar().showMessage(
+            tr("Fixing TOC for {n} book(s)\u2026").format(n=len(paths))
+        )
+        QApplication.processEvents()
+        fixed = 0
+        for path in paths:
+            try:
+                if rebuild_toc_ncx(path):
+                    fixed += 1
+            except Exception as e:  # noqa: BLE001
+                self._append_log(
+                    tr("[{book}] TOC fix failed: {error}").format(
+                        book=os.path.basename(path), error=str(e)
+                    ) + "\n"
+                )
+        if fixed:
+            self.statusBar().showMessage(
+                tr("Fixed TOC for {n} of {total} book(s).").format(
+                    n=fixed, total=len(paths)
+                ),
+                5000,
+            )
+        else:
+            self.statusBar().showMessage(tr("No TOC changes needed."), 4000)
 
     def _cleanup_ghosts(self) -> None:
         lib = self.calibre_edit.text().strip()
