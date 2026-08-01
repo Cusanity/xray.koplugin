@@ -751,6 +751,26 @@ class ModelFetchWorker(QObject):
             self.failed.emit(str(e))
 
 
+class _ChainModelRefreshWorker(QObject):
+    """Fetches model lists for multiple providers sequentially in one thread."""
+
+    provider_done = pyqtSignal(str, list)  # provider key, model list
+    finished = pyqtSignal()
+
+    def __init__(self, providers: list[str]) -> None:
+        super().__init__()
+        self._providers = providers
+
+    def run(self) -> None:
+        for provider in self._providers:
+            try:
+                models = fetch_models_for(provider)
+            except Exception:  # noqa: BLE001
+                models = []
+            self.provider_done.emit(provider, models)
+        self.finished.emit()
+
+
 class ProviderBalanceWorker(QObject):
     """Fetches provider balance/cost information off the UI thread."""
 
@@ -1787,6 +1807,8 @@ class MainWindow(QMainWindow):
         self._price_thread: QThread | None = None
         self._price_fetcher: _PriceFetcher | None = None
         self._price_catalog: dict = {}
+        self._chain_model_thread: QThread | None = None
+        self._chain_model_worker: _ChainModelRefreshWorker | None = None
         self._deepseek_peak_timer: QTimer | None = None
         self._webdav_authenticated = False
         self._wizard_menu_action: QAction | None = None
@@ -1808,7 +1830,6 @@ class MainWindow(QMainWindow):
 
         self._load_prefs_into_ui()
         self._on_provider_changed()
-        self._maybe_offer_setup_wizard()
 
         # Keep DeepSeek peak/off-peak badge in sync with current Beijing time.
         self._deepseek_peak_timer = QTimer(self)
@@ -1816,17 +1837,9 @@ class MainWindow(QMainWindow):
         self._deepseek_peak_timer.timeout.connect(self._refresh_deepseek_pricing_ui)
         self._deepseek_peak_timer.start()
 
-        # Auto-scan the Calibre library at launch so the book list is ready
-        # without a manual click (only when a valid library path is set).
-        # If no path is configured yet, try to auto-detect one.
-        lib = self.calibre_edit.text().strip()
-        if not lib:
-            found = calibre_browser.find_calibre_libraries()
-            if found:
-                lib = found[0]
-                self.calibre_edit.setText(lib)
-        if lib and os.path.isdir(lib):
-            self._scan_library()
+        # Defer slow init (model fetches, filesystem scan, wizard) until after
+        # the window is visible so startup feels instant.
+        QTimer.singleShot(0, self._deferred_init)
 
     # ------------------------------------------------------------------ menu
     def _build_menu(self) -> None:
@@ -2409,6 +2422,7 @@ class MainWindow(QMainWindow):
         model: str = "",
         retries: int = retry_config.DEFAULT_RETRIES,
         cooldown: float = retry_config.DEFAULT_COOLDOWN,
+        lazy: bool = False,
     ) -> None:
         table = self.chain_table
         r = table.rowCount()
@@ -2424,7 +2438,10 @@ class MainWindow(QMainWindow):
 
         model_combo = QComboBox()
         model_combo.setEditable(True)
-        model_combo.addItems(fetch_models_for(provider))
+        if not lazy:
+            model_combo.addItems(fetch_models_for(provider))
+        if model and model_combo.findText(model) < 0:
+            model_combo.insertItem(0, model)
         model_combo.setCurrentText(model)
         model_combo.currentTextChanged.connect(lambda _, row=r: self._chain_refresh_cost_row(row))
         table.setCellWidget(r, 1, model_combo)
@@ -2658,6 +2675,51 @@ class MainWindow(QMainWindow):
         entries = [e for e in self._chain_rows() if e.is_valid()]
         return RetryChain(entries=entries, options=self._chain_options_from_ui())
 
+    def _refresh_chain_model_combos_async(self) -> None:
+        """Fetch model lists for every unique provider in the chain without blocking."""
+        if self._chain_model_thread is not None:
+            return
+        provider_rows: dict[str, list[int]] = {}
+        for r in range(self.chain_table.rowCount()):
+            w = self.chain_table.cellWidget(r, 0)
+            if not w:
+                continue
+            p = w.currentData() or "openai"
+            provider_rows.setdefault(p, []).append(r)
+        if not provider_rows:
+            return
+        self._chain_model_rows = provider_rows
+        self._chain_model_thread = QThread()
+        self._chain_model_worker = _ChainModelRefreshWorker(list(provider_rows.keys()))
+        self._chain_model_worker.moveToThread(self._chain_model_thread)
+        self._chain_model_thread.started.connect(self._chain_model_worker.run)
+        self._chain_model_worker.provider_done.connect(self._on_chain_model_refresh_done)
+        self._chain_model_worker.finished.connect(self._chain_model_thread.quit)
+        self._chain_model_thread.finished.connect(self._cleanup_chain_model_thread)
+        self._chain_model_thread.start()
+
+    def _on_chain_model_refresh_done(self, provider: str, models: list) -> None:
+        rows = getattr(self, "_chain_model_rows", {}).get(provider, [])
+        for r in rows:
+            mdl_w = self.chain_table.cellWidget(r, 1)
+            if not mdl_w:
+                continue
+            current = mdl_w.currentText()
+            mdl_w.blockSignals(True)
+            mdl_w.clear()
+            mdl_w.addItems(models)
+            if current and mdl_w.findText(current) < 0:
+                mdl_w.insertItem(0, current)
+            mdl_w.setCurrentText(current)
+            mdl_w.blockSignals(False)
+            self._chain_fill_cost_row(r, provider, current)
+
+    def _cleanup_chain_model_thread(self) -> None:
+        if self._chain_model_thread is not None:
+            self._chain_model_thread.wait()
+        self._chain_model_thread = None
+        self._chain_model_worker = None
+
     def _chain_tooltip_text(self) -> str:
         """Return a plain-text summary of the current model chain for the info tooltip."""
         chain = self._chain_from_ui()
@@ -2688,6 +2750,7 @@ class MainWindow(QMainWindow):
                 model=e.model,
                 retries=e.retries,
                 cooldown=e.cooldown,
+                lazy=True,
             )
         opts = chain.options
         self.chain_max_cycles.setValue(opts.max_cycles)
@@ -2976,6 +3039,22 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             tr("Desktop shortcut created: {path}").format(path=shortcut_path), 5000
         )
+
+    def _deferred_init(self) -> None:
+        """Runs after the window is visible; completes slow startup tasks."""
+        # Populate model combos in the chain table from the network (non-blocking).
+        self._refresh_chain_model_combos_async()
+        # Auto-detect Calibre library if none is set, then scan.
+        lib = self.calibre_edit.text().strip()
+        if not lib:
+            found = calibre_browser.find_calibre_libraries()
+            if found:
+                lib = found[0]
+                self.calibre_edit.setText(lib)
+        if lib and os.path.isdir(lib):
+            self._scan_library()
+        # Offer the first-run wizard after the rest of the UI is ready.
+        self._maybe_offer_setup_wizard()
 
     def _maybe_offer_setup_wizard(self) -> None:
         if self._setup_wizard_has_launched():
