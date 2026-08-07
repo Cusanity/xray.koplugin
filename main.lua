@@ -18,6 +18,25 @@ local Event = require("ui/event")
 -- prioritize xray in the tools menu
 table.insert(require("ui/elements/reader_menu_order").tools, 1, "xray")
 
+-- KOReader used to ship a standalone frontend/apps/cloudstorage/syncservice module;
+-- newer versions removed it and folded its logic into the cloudstorage.koplugin
+-- plugin instance (self.ui.cloudstorage) instead. Support both so this plugin keeps
+-- working regardless of which KOReader version the user is on. Returns a table with
+-- :onShowCloudStorageList(callback), or nil.
+local function get_cloud_sync(ui)
+    local ok, OldSyncService = pcall(require, "frontend/apps/cloudstorage/syncservice")
+    if ok and OldSyncService then
+        return {
+            onShowCloudStorageList = function(_, callback)
+                local dialog = OldSyncService:new{}
+                dialog.onClose = function(this) UIManager:close(this) end
+                dialog.onConfirm = callback
+                UIManager:show(dialog)
+            end,
+        }
+    end
+    return ui and ui.cloudstorage
+end
 
 local XRayPlugin = WidgetContainer:new{
     name = "xray",
@@ -1415,7 +1434,7 @@ end
 -- showCharacterDetails consolidated to implementation at line 2022
 
 function XRayPlugin:manageSyncServer(touchmenu_instance)
-    local cs = self.ui.cloudstorage
+    local cs = get_cloud_sync(self.ui)
     if not cs then
         UIManager:show(InfoMessage:new{
             text = "The Cloud storage plugin is required for syncing but isn't available.",

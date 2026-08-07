@@ -2,9 +2,13 @@
 --
 -- KOReader removed the standalone frontend/apps/cloudstorage/webdavapi module
 -- (folded into plugins/cloudstorage.koplugin/providers/webdav.lua, which is not
--- requirable from other plugins). This file is a self-contained copy of the
--- subset of that API xray.koplugin depends on directly for custom PROPFIND-based
--- listing, so it keeps working across KOReader versions.
+-- requirable from other plugins). Older KOReader versions still ship the original
+-- module, so prefer that (it tracks upstream fixes) and only fall back to this
+-- self-contained copy when it's gone.
+local ok, upstream = pcall(require, "apps/cloudstorage/webdavapi")
+if ok then
+    return upstream
+end
 
 local http = require("socket.http")
 local ltn12 = require("ltn12")

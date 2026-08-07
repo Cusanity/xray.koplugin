@@ -4,6 +4,8 @@
 -- but its upload/download paths are currently only implemented for WebDAV (see
 -- sync.lua's "Not implemented" branches), so these methods are never actually
 -- invoked. This stub exists so require() succeeds and Sync:getApi() keeps working.
+-- (Note: even old KOReader's real dropboxapi.lua used a different, token-based
+-- API with no getJoinedPath method, so there's no compatible upstream to prefer here.)
 
 local logger = require("logger")
 
