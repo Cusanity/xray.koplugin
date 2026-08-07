@@ -35,41 +35,41 @@ local Localization = {
 function Localization:parsePO(filepath)
     local translations = {}
     local file = io.open(filepath, "r")
-    
+
     if not file then
         logger.warn("Localization: Cannot open .po file:", filepath)
         return nil
     end
-    
+
     local msgid = nil
     local msgstr = nil
     local in_msgid = false
     local in_msgstr = false
-    
+
     for line in file:lines() do
         -- Skip comments and empty lines
         if line:match("^#") or line:match("^%s*$") then
             goto continue
         end
-        
+
         -- Start of msgid
         if line:match('^msgid%s+"') then
             -- Save previous translation
             if msgid and msgstr then
                 translations[msgid] = msgstr
             end
-            
+
             msgid = line:match('^msgid%s+"(.-)"')
             msgstr = nil
             in_msgid = true
             in_msgstr = false
-        
+
         -- Start of msgstr
         elseif line:match('^msgstr%s+"') then
             msgstr = line:match('^msgstr%s+"(.-)"')
             in_msgid = false
             in_msgstr = true
-        
+
         -- Continuation line
         elseif line:match('^"') then
             local continuation = line:match('^"(.-)"')
@@ -79,17 +79,17 @@ function Localization:parsePO(filepath)
                 msgstr = msgstr .. continuation
             end
         end
-        
+
         ::continue::
     end
-    
+
     -- Save last translation
     if msgid and msgstr then
         translations[msgid] = msgstr
     end
-    
+
     file:close()
-    
+
     -- Process escape sequences
     for key, value in pairs(translations) do
         value = value:gsub("\\n", "\n")
@@ -98,38 +98,38 @@ function Localization:parsePO(filepath)
         value = value:gsub("\\\\", "\\")
         translations[key] = value
     end
-    
+
     return translations
 end
 
 -- Initialize localization system
 function Localization:init()
     logger.info("Localization: Initializing...")
-    
+
     -- Discover available language files
     self:discoverLanguages()
-    
+
     -- Load saved language preference
     self:loadLanguage()
-    
+
     -- Load translation file
     self:loadTranslations()
-    
+
     logger.info("Localization: Initialized with language:", self.current_language)
 end
 
 -- Discover available .po files
 function Localization:discoverLanguages()
     local lang_dir = self.plugin_dir .. "/languages"
-    
+
     self.available_languages = {}
-    
+
     local attr = lfs.attributes(lang_dir)
     if not attr or attr.mode ~= "directory" then
         logger.warn("Localization: Languages directory not found:", lang_dir)
         return
     end
-    
+
     for file in lfs.dir(lang_dir) do
         if file:match("%.po$") then
             local lang_code = file:match("^(.+)%.po$")
@@ -139,7 +139,7 @@ function Localization:discoverLanguages()
             end
         end
     end
-    
+
     table.sort(self.available_languages)
     logger.info("Localization: Discovered", #self.available_languages, "languages")
 end
@@ -147,17 +147,17 @@ end
 -- Load translations from .po file
 function Localization:loadTranslations()
     local po_file = self.plugin_dir .. "/languages/" .. self.current_language .. ".po"
-    
+
     logger.info("Localization: Loading translations from:", po_file)
-    
+
     local translations = self:parsePO(po_file)
-    
+
     if translations then
         self.translations = translations
         logger.info("Localization: Loaded", self:tableSize(translations), "translations")
     else
         logger.warn("Localization: Failed to load .po file")
-        
+
         -- Fallback to Chinese
         if self.current_language ~= "zh" then
             logger.info("Localization: Falling back to Chinese")
@@ -184,7 +184,7 @@ end
 -- Get translated string with better error handling
 function Localization:t(key, ...)
     local translation = self.translations[key]
-    
+
     if not translation or translation == "" then
         logger.warn("Localization: Missing translation key:", key)
         -- Return a user-friendly fallback instead of the key
@@ -239,14 +239,14 @@ function Localization:t(key, ...)
             local_key_saved = "本地AI密钥已保存！",
             local_model_saved = "本地AI模型已保存！",
             local_ai_selected = "已选择本地AI",
-            
+
             -- Provider Selection
             menu_provider_select = "选择 AI 提供商",
             provider_select_title = "选择 AI 提供商",
             gemini_selected = "已启用 Google Gemini",
             chatgpt_selected = "已启用 ChatGPT",
             set_key_first = "请先设置 API 密钥！",
-            
+
             -- View Options
             menu_view_options = "显示选项",
             menu_characters = "人物",
@@ -258,13 +258,12 @@ function Localization:t(key, ...)
             menu_themes = "主题",
             menu_summary = "总结",
             menu_author_info = "作者信息",
-            menu_author_info = "作者信息",
             menu_full_analysis = "完整分析",
             listing_files = "正在列出文件...",
         }
         translation = fallbacks[key] or key
     end
-    
+
     -- Format with arguments
     if select('#', ...) > 0 then
         local success, result = pcall(string.format, translation, ...)
@@ -282,7 +281,7 @@ function Localization:t(key, ...)
             return translation
         end
     end
-    
+
     return translation
 end
 
@@ -313,14 +312,14 @@ function Localization:setLanguage(lang_code)
         logger.warn("Localization: Cannot set non-existent language:", lang_code)
         return false
     end
-    
+
     self.current_language = lang_code
-    
+
     local DataStorage = require("datastorage")
     local settings_dir = DataStorage:getSettingsDir()
     local xray_dir = settings_dir .. "/xray"
     lfs.mkdir(xray_dir)
-    
+
     local language_file = xray_dir .. "/language.txt"
     local file = io.open(language_file, "w")
     if file then
@@ -328,7 +327,7 @@ function Localization:setLanguage(lang_code)
         file:close()
         logger.info("Localization: Language saved:", lang_code)
     end
-    
+
     self:loadTranslations()
 
     return true

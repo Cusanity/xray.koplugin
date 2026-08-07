@@ -18,11 +18,11 @@ function CacheManager:getCachePath(book_path)
     if not book_path then
         return nil
     end
-    
+
     -- Use KOReader's sidecar directory
     local cache_dir = DocSettings:getSidecarDir(book_path)
     local cache_file = cache_dir .. "/xray_cache.lua"
-    
+
     logger.info("CacheManager: Cache path:", cache_file)
     return cache_file
 end
@@ -33,20 +33,20 @@ function CacheManager:ensureDirectory(path)
     if not dir then
         return false
     end
-    
+
     local attr = lfs.attributes(dir)
     if attr and attr.mode == "directory" then
         return true
     end
-    
+
     logger.info("CacheManager: Creating directory:", dir)
     local success, err = lfs.mkdir(dir)
-    
+
     if not success then
         logger.warn("CacheManager: Failed to create directory:", err or "unknown error")
         return false
     end
-    
+
     return true
 end
 
@@ -56,55 +56,55 @@ function CacheManager:saveCache(book_path, data)
         logger.warn("CacheManager: Cannot save cache - invalid parameters")
         return false
     end
-    
+
     local cache_file = self:getCachePath(book_path)
     if not cache_file then
         logger.warn("CacheManager: Cannot determine cache path")
         return false
     end
-    
+
     -- Ensure directory exists
     if not self:ensureDirectory(cache_file) then
         logger.warn("CacheManager: Cannot create cache directory")
         return false
     end
-    
+
     -- Add timestamp
     data.cached_at = os.time()
     data.cache_version = "6.0"
-    
+
     -- Serialize data
     local success, err = pcall(function()
         local f, open_err = io.open(cache_file, "w")
-        
+
         if not f then
             logger.warn("CacheManager: Cannot open file for writing:", cache_file)
             logger.warn("CacheManager: Error:", open_err or "unknown")
             return false
         end
-        
+
         local serialized_data = self:serialize(data)
-        
+
         if not serialized_data then
             logger.warn("CacheManager: Failed to serialize data")
             f:close()
             return false
         end
-        
+
         f:write("-- X-Ray Cache v6.0\n")
         f:write("-- Generated: " .. os.date("%Y-%m-%d %H:%M:%S") .. "\n\n")
         f:write("return " .. serialized_data)
         f:close()
-        
+
         logger.info("CacheManager: Saved cache to:", cache_file)
         return true
     end)
-    
+
     if not success then
         logger.warn("CacheManager: Failed to save cache:", err or "unknown error")
         return false
     end
-    
+
     return success
 end
 
@@ -113,36 +113,36 @@ function CacheManager:loadCache(book_path)
     if not book_path then
         return nil
     end
-    
+
     local cache_file = self:getCachePath(book_path)
     if not cache_file then
         logger.warn("CacheManager: Cannot determine cache path")
         return nil
     end
-    
+
     -- Check if cache file exists
     local attr = lfs.attributes(cache_file)
     if not attr then
         logger.info("CacheManager: No cache file found")
         return nil
     end
-    
+
     -- Load cache
     local success, data = pcall(function()
         return dofile(cache_file)
     end)
-    
+
     if not success or not data then
         logger.warn("CacheManager: Failed to load cache:", data or "unknown error")
         return nil
     end
-    
+
     -- Check cache version
     if data.cache_version ~= "6.0" then
         logger.warn("CacheManager: Cache version mismatch, ignoring")
         return nil
     end
-    
+
     logger.info("CacheManager: Loaded cache from:", cache_file)
     return data
 end
@@ -151,16 +151,16 @@ end
 function CacheManager:serialize(obj, indent, seen)
     indent = indent or ""
     seen = seen or {}
-    
+
     local t = type(obj)
-    
+
     if t == "table" then
         -- Prevent infinite recursion
         if seen[obj] then
             return "{--[[circular reference]]}"
         end
         seen[obj] = true
-        
+
         local s = "{\n"
         for k, v in pairs(obj) do
             -- Skip functions and userdata
@@ -196,7 +196,7 @@ end
 -- Clear cache for a book (includes main cache and all analysis caches)
 function CacheManager:clearCache(book_path)
     local cleared = false
-    
+
     -- Clear main cache file
     local cache_file = self:getCachePath(book_path)
     if cache_file then
@@ -208,18 +208,20 @@ function CacheManager:clearCache(book_path)
             logger.warn("CacheManager: Failed to clear main cache:", err or "unknown")
         end
     end
-    
+
     -- Clear analysis caches (xray_data.json and legacy xx%.json files)
     local analysis_dir = self:getAnalysisCacheDir(book_path)
     if analysis_dir and lfs.attributes(analysis_dir) then
         -- Clear unified xray_data.json
         local xray_data_file = analysis_dir .. "/xray_data.json"
-        local success, err = os.remove(xray_data_file)
+        local success, remove_err = os.remove(xray_data_file)
         if success then
             logger.info("CacheManager: Cleared xray_data.json")
             cleared = true
+        elseif remove_err then
+            logger.warn("CacheManager: Failed to clear xray_data.json:", remove_err)
         end
-        
+
         -- Clear legacy percentage-based caches (xx%.json files)
         for file in lfs.dir(analysis_dir) do
             if file:match("^%d+%%%.json$") then
@@ -236,7 +238,7 @@ function CacheManager:clearCache(book_path)
         -- Try to remove the directory if empty
         pcall(function() lfs.rmdir(analysis_dir) end)
     end
-    
+
     return cleared
 end
 
@@ -251,23 +253,23 @@ end
 -- Load the unified xray_data.json file
 function CacheManager:getXRayData(book_path)
     local dir = self:getAnalysisCacheDir(book_path)
-    if not dir then 
+    if not dir then
         logger.info("CacheManager: getXRayData - no analysis dir for:", book_path)
-        return nil 
+        return nil
     end
-    
+
     local file = dir .. "/xray_data.json"
     logger.info("CacheManager: Trying xray_data.json at:", file)
-    
+
     local f = io.open(file, "r")
-    if not f then 
+    if not f then
         logger.info("CacheManager: xray_data.json not found")
-        return nil 
+        return nil
     end
-    
+
     local content = f:read("*a")
     f:close()
-    
+
     if content and #content > 0 then
         local success, data = pcall(json.decode, content)
         if success and data then
@@ -289,35 +291,35 @@ function CacheManager:getDescriptionForProgress(descriptions, reader_progress)
     if not descriptions or #descriptions == 0 then
         return ""
     end
-    
+
     -- Default to empty if no suitable description found
     local best_text = ""
     local best_pct = -1
     local first_text = ""
     local first_pct = 999
-    
+
     for _, entry in ipairs(descriptions) do
         local pct = entry.percent or 0
         local text = entry.text or ""
-        
+
         -- Track the first/earliest description as fallback
         if pct < first_pct then
             first_pct = pct
             first_text = text
         end
-        
+
         -- Find highest percent that is <= reader_progress
         if pct <= reader_progress and pct > best_pct then
             best_pct = pct
             best_text = text
         end
     end
-    
+
     -- If no description found at or before current progress, use the first available
     if best_text == "" and first_text ~= "" then
         return first_text
     end
-    
+
     return best_text
 end
 
@@ -326,12 +328,12 @@ end
 function CacheManager:getAvailableCaches(book_path)
     local dir = self:getAnalysisCacheDir(book_path)
     if not dir then return {} end
-    
+
     -- Check if directory exists before iterating
     if not lfs.attributes(dir) then
         return {}
     end
-    
+
     local caches = {}
     for file in lfs.dir(dir) do
         local percent = file:match("^(%d+)%%%.json$")
@@ -342,23 +344,23 @@ function CacheManager:getAvailableCaches(book_path)
             })
         end
     end
-    
+
     -- Sort by percentage ascending
     table.sort(caches, function(a, b) return a.percent < b.percent end)
-    
+
     return caches
 end
 
 -- Validate if analysis data is empty
 function CacheManager:isValidAnalysis(content)
     if not content or content == "" then return false end
-    
+
     local success, data = pcall(json.decode, content)
     if not success or not data then return false end
-    
+
     -- Check for meaningful data
     local has_data = false
-    
+
     local keys_to_check = {"characters", "locations", "themes", "events"}
     for _, key in ipairs(keys_to_check) do
         if data[key] and next(data[key]) then
@@ -366,7 +368,7 @@ function CacheManager:isValidAnalysis(content)
             break
         end
     end
-    
+
     return has_data
 end
 
@@ -375,7 +377,7 @@ end
 function CacheManager:getNearestPartialCache(book_path, target_percent)
     local caches = self:getAvailableCaches(book_path)
     if #caches == 0 then return nil end
-    
+
     -- Filter candidates <= target_percent
     local candidates = {}
     for _, cache in ipairs(caches) do
@@ -383,10 +385,10 @@ function CacheManager:getNearestPartialCache(book_path, target_percent)
              table.insert(candidates, cache)
          end
     end
-    
+
     -- Sort candidates descending (best fit first)
     table.sort(candidates, function(a, b) return a.percent > b.percent end)
-    
+
     -- Iterate candidates to find first non-empty one
     for _, candidate in ipairs(candidates) do
         local content = self:getAnalysis(book_path, candidate.percent)
@@ -403,21 +405,21 @@ function CacheManager:getNearestPartialCache(book_path, target_percent)
             logger.info("CacheManager: Skipping empty/invalid partial cache at " .. candidate.percent .. "%")
         end
     end
-    
+
     return nil
 end
 
 function CacheManager:getAnalysis(book_path, percent)
     local dir = self:getAnalysisCacheDir(book_path)
     if not dir then return nil end
-    
+
     local file = string.format("%s/%d%%.json", dir, percent)
     local f = io.open(file, "r")
     if not f then return nil end
-    
+
     local content = f:read("*a")
     f:close()
-    
+
     -- It's stored as raw JSON, so just return it
     if content and #content > 0 then
         return content
@@ -428,12 +430,12 @@ end
 function CacheManager:saveAnalysis(book_path, percent, json_content)
     local dir = self:getAnalysisCacheDir(book_path)
     if not dir then return false end
-    
+
     -- Ensure dir exists
     if not self:ensureDirectory(dir .. "/dummy_file") then
         return false
     end
-    
+
     local file = string.format("%s/%d%%.json", dir, percent)
     local f = io.open(file, "w")
     if f then
@@ -442,7 +444,7 @@ function CacheManager:saveAnalysis(book_path, percent, json_content)
         logger.info("CacheManager: Saved analysis for " .. percent .. "%")
         return true
     end
-    
+
     logger.warn("CacheManager: Failed to save analysis for " .. percent .. "%")
     return false
 end
@@ -453,13 +455,13 @@ function CacheManager:searchEntityInForwardCaches(book_path, current_percent, no
     if not book_path or not normalized_text or normalized_text == "" then
         return nil, nil
     end
-    
+
     local caches = self:getAvailableCaches(book_path)
-    if #caches == 0 then 
+    if #caches == 0 then
         logger.info("CacheManager: No forward caches available")
-        return nil, nil 
+        return nil, nil
     end
-    
+
     -- Filter to only caches with percent > current_percent
     local forward_caches = {}
     for _, cache in ipairs(caches) do
@@ -467,14 +469,14 @@ function CacheManager:searchEntityInForwardCaches(book_path, current_percent, no
             table.insert(forward_caches, cache)
         end
     end
-    
+
     if #forward_caches == 0 then
         logger.info("CacheManager: No caches ahead of current position (" .. current_percent .. "%)")
         return nil, nil
     end
-    
+
     logger.info("CacheManager: Searching " .. #forward_caches .. " forward caches for: " .. normalized_text)
-    
+
     -- Iterate through forward caches in ascending order (already sorted by getAvailableCaches)
     for _, cache in ipairs(forward_caches) do
         local content = self:getAnalysis(book_path, cache.percent)
@@ -490,7 +492,7 @@ function CacheManager:searchEntityInForwardCaches(book_path, current_percent, no
                         end
                     end
                 end
-                
+
                 -- Search locations
                 if data.locations then
                     for _, location in ipairs(data.locations) do
@@ -500,7 +502,7 @@ function CacheManager:searchEntityInForwardCaches(book_path, current_percent, no
                         end
                     end
                 end
-                
+
                 -- Search themes
                 if data.themes then
                     for _, theme in ipairs(data.themes) do
@@ -514,7 +516,7 @@ function CacheManager:searchEntityInForwardCaches(book_path, current_percent, no
             end
         end
     end
-    
+
     logger.info("CacheManager: Entity not found in any forward cache")
     return nil, nil
 end

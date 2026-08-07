@@ -29,17 +29,17 @@ function Sync:listFolderAll(api, server, folder_path)
     local ltn12 = require("ltn12")
     local socket = require("socket")
     local socketutil = require("socketutil")
-    
+
     -- Construct Full URL for listing
     local list_url = api:getJoinedPath(server.address, folder_path)
     -- WebDavApi:listFolder forces a trailing slash, let's do the same for PROPFIND on a collection
     if list_url:sub(-1) ~= "/" then
         list_url = list_url .. "/"
     end
-    
+
     local sink = {}
     local data = [[<?xml version="1.0"?><a:propfind xmlns:a="DAV:"><a:prop><a:resourcetype/><a:getcontentlength/><a:getetag/></a:prop></a:propfind>]]
-    
+
     socketutil:set_timeout()
     local request = {
         url      = list_url,
@@ -54,18 +54,18 @@ function Sync:listFolderAll(api, server, folder_path)
         source   = ltn12.source.string(data),
         sink     = ltn12.sink.table(sink),
     }
-    
+
     local code, _, status = socket.skip(1, http.request(request))
     socketutil:reset_timeout()
-    
+
     if not code or code < 200 or code > 299 then
         logger.warn("Sync: listFolderAll failed:", status or code)
         return nil
     end
-    
+
     local res_data = table.concat(sink)
     local items = {}
-    
+
     if res_data ~= "" then
         -- Parse WebDAV PROPFIND response
         for item in res_data:gmatch("<[^:]*:response[^>]*>(.-)</[^:]*:response>") do
@@ -74,18 +74,18 @@ function Sync:listFolderAll(api, server, folder_path)
             -- item_href is typically absolute path e.g. /dav/path/to/file
             local decoded_href = util.urlDecode(item_href)
             local display_name = ffiutil.basename(decoded_href)
-            
+
             -- Construct clean relative path: folder_path + / + filename
             -- This mirrors WebDavApi:listFolder logic to avoid duplication
             local clean_path = self:joinPath(folder_path, display_name)
-            
+
             local is_collection = item:find("<[^:]*:collection[^<]*/>")
             local etag = item:match("<[^:]*:getetag[^>]*>(.-)</[^:]*:getetag>")
-            
+
             -- Simple check to skip current directory (if paths match)
             -- Or just check if basename is empty/matches folder name?
             -- WebDavApi checks: self.trim_slashes(item_fullpath) == path
-            
+
             local is_current = (decoded_href == list_url) or (decoded_href .. "/" == list_url) or (display_name == "")
             -- Better check: if constructed clean_path == folder_path (ignoring trailing slash)
             if clean_path:gsub("/$", "") == folder_path:gsub("/$", "") then
@@ -102,7 +102,7 @@ function Sync:listFolderAll(api, server, folder_path)
             end
         end
     end
-    
+
     return items
 end
 
@@ -140,7 +140,7 @@ function Sync:ensureRemoteFolder(api, server, folder_path)
 
     -- WebDAV: Check if exists, if not create
     -- Using getJoinedPath since folder_path is relative
-    
+
     local full_url = api:getJoinedPath(server.address, folder_path)
     local code = api:createFolder(full_url, server.username, server.password)
     -- 201 Created, 405 Method Not Allowed (likely already exists), 301/302 Redirection
@@ -185,43 +185,43 @@ end
 
 function Sync:upload(cache_manager, server, book_path, callback)
     if not server or not book_path then return end
-    
+
     local api = self:getApi(server)
     local paths = self:getLocalPaths(cache_manager, book_path)
-    
+
     -- 1. Base Structure
     -- Server Root / remote_subdir /
     local remote_base = server.url -- User selected folder
     local remote_book_dir = self:joinPath(remote_base, paths.remote_subdir)
     local remote_analysis_dir = self:joinPath(remote_book_dir, "xray_analysis")
-    
+
     -- Ensure remote dirs exist
     self:ensureRemoteFolder(api, server, remote_book_dir)
     self:ensureRemoteFolder(api, server, remote_analysis_dir)
-    
+
     local success_count = 0
     local fail_count = 0
     local errors = {}
-    
+
     -- Helper for uploading single file
     local function upload_file(local_path, remote_dir)
         if not lfs.attributes(local_path) then return end
-        
+
         local filename = ffiutil.basename(local_path)
         local remote_file_path = self:joinPath(remote_dir, filename)
-        
+
         local full_url = remote_file_path -- Default
         if server.type == "webdav" then
              full_url = api:getJoinedPath(server.address, remote_file_path)
         end
-        
+
         local code
         if server.type == "webdav" then
             code = api:uploadFile(full_url, server.username, server.password, local_path)
         else
              code = 400 -- Not implemented
         end
-        
+
         if type(code) == "number" and code >= 200 and code < 300 then
             success_count = success_count + 1
             logger.info("Sync: Uploaded", filename)
@@ -231,15 +231,15 @@ function Sync:upload(cache_manager, server, book_path, callback)
             table.insert(errors, filename .. " (" .. tostring(code) .. ") -> " .. full_url)
         end
     end
-    
+
     -- 2. Upload xray_cache.lua (Check parent dir items?)
     -- Ideally we list parent dir too, but for now let's just force upload cache.lua as it changes often
     -- Or implement listing for it. Let's force it for safety as it's small.
     if lfs.attributes(paths.cache_file) then
         upload_file(paths.cache_file, remote_book_dir)
     end
-    
-    
+
+
     -- 3. Upload Analysis Files
     if lfs.attributes(paths.analysis_dir) and lfs.attributes(paths.analysis_dir, "mode") == "directory" then
         -- Now upload local analysis files
@@ -251,7 +251,7 @@ function Sync:upload(cache_manager, server, book_path, callback)
             end
         end
     end
-    
+
     if callback then callback(success_count, fail_count, errors) end
 end
 
@@ -349,7 +349,7 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
     local remote_base = server.url
     local remote_book_dir = self:joinPath(remote_base, remote_subdir_override or paths.remote_subdir)
     local remote_analysis_dir = self:joinPath(remote_book_dir, "xray_analysis")
-    
+
     local success_count = 0
     local fail_count = 0
     local skipped_count = 0
@@ -362,14 +362,14 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
     local function download_file(remote_item, local_dest)
         local filename = remote_item.display_name or ffiutil.basename(remote_item.url)
         -- remote_item.url is now RELATIVE path from listFolderAll
-        
+
         local full_url = remote_item.url
         if server.type == "webdav" then
              full_url = api:getJoinedPath(server.address, remote_item.url)
         end
-        
+
         local code, _ = api:downloadFile(full_url, server.username, server.password, local_dest)
-        
+
         if type(code) == "number" and code == 200 then
             success_count = success_count + 1
             logger.info("Sync: Downloaded", filename)
@@ -381,17 +381,17 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
             return false
         end
     end
-    
+
     -- 2. Download Analysis Files
     local items = nil
     if server.type == "webdav" then
         -- Pass relative path 'remote_analysis_dir'
         items = self:listFolderAll(api, server, remote_analysis_dir)
     end
-    
+
     -- Ensure local analysis dir exists
     lfs.mkdir(paths.analysis_dir)
-    
+
     if items then
         -- Check if we have any local analysis files to avoid mixing
         local has_local_files = false
@@ -428,28 +428,28 @@ function Sync:download(cache_manager, server, book_path, callback, force, progre
                 if not filename and item.url then
                     filename = ffiutil.basename(item.url)
                 end
-                
+
                 if progress_callback then
                     progress_callback(i, #items, filename)
                 end
-                
+
                 -- Skip directories
                 if item.type == "folder" or item.type == "directory" then
                     goto continue
                 end
-    
+
                 -- Handle both legacy X%.json files and new xray_data.json
                 if filename and (filename:match("^%d+%%%.json$") or filename == "xray_data.json") then
                      local local_dest = paths.analysis_dir .. "/" .. filename
                      download_file(item, local_dest)
                 end
-                
+
                 ::continue::
             end
         end
     end
-    
-    
+
+
     if callback then callback(success_count, fail_count, errors, skipped_count) end
 end
 

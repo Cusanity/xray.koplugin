@@ -17,10 +17,10 @@ function CharacterNotes:getNotesPath(book_path)
     if not book_path then
         return nil
     end
-    
+
     local cache_dir = DocSettings:getSidecarDir(book_path)
     local notes_file = cache_dir .. "/xray_notes.lua"
-    
+
     return notes_file
 end
 
@@ -30,22 +30,22 @@ function CharacterNotes:loadNotes(book_path)
     if not notes_file then
         return {}
     end
-    
+
     local attr = lfs.attributes(notes_file)
     if not attr then
         logger.info("CharacterNotes: No notes file found")
         return {}
     end
-    
+
     local success, notes = pcall(function()
         return dofile(notes_file)
     end)
-    
+
     if success and notes then
         logger.info("CharacterNotes: Loaded", self:countNotes(notes), "notes")
         return notes
     end
-    
+
     return {}
 end
 
@@ -55,7 +55,7 @@ function CharacterNotes:saveNotes(book_path, notes)
     if not notes_file then
         return false
     end
-    
+
     local success = pcall(function()
         local f = io.open(notes_file, "w")
         if f then
@@ -67,7 +67,7 @@ function CharacterNotes:saveNotes(book_path, notes)
         end
         return false
     end)
-    
+
     return success
 end
 
@@ -76,7 +76,7 @@ function CharacterNotes:getNote(notes, character_name)
     if not notes or not character_name then
         return nil
     end
-    
+
     return notes[character_name]
 end
 
@@ -85,12 +85,12 @@ function CharacterNotes:setNote(notes, character_name, note_text)
     if not notes or not character_name then
         return false
     end
-    
+
     notes[character_name] = {
         text = note_text,
         updated_at = os.time(),
     }
-    
+
     logger.info("CharacterNotes: Updated note for:", character_name)
     return true
 end
@@ -100,7 +100,7 @@ function CharacterNotes:deleteNote(notes, character_name)
     if not notes or not character_name then
         return false
     end
-    
+
     notes[character_name] = nil
     logger.info("CharacterNotes: Deleted note for:", character_name)
     return true
@@ -111,12 +111,12 @@ function CharacterNotes:countNotes(notes)
     if not notes then
         return 0
     end
-    
+
     local count = 0
     for _ in pairs(notes) do
         count = count + 1
     end
-    
+
     return count
 end
 
@@ -124,7 +124,7 @@ end
 function CharacterNotes:serialize(obj, indent)
     indent = indent or ""
     local t = type(obj)
-    
+
     if t == "table" then
         local s = "{\n"
         for k, v in pairs(obj) do

@@ -1,5 +1,4 @@
 -- X-Ray Plugin for KOReader v2.0.0
--- luacheck: globals G_reader_settings
 
 local UIManager = require("ui/uimanager")
 local InfoMessage = require("ui/widget/infomessage")
@@ -176,7 +175,7 @@ function XRayPlugin:showNativeDetails(title, main_text, metadata_items, extra_bu
             },
             VerticalGroup:new{
                 align = "left",
-                table.unpack(metadata_widgets)
+                unpack(metadata_widgets)
             },
             VerticalSpan:new{ width = Size.padding.medium },
             button_table,
