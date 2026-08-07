@@ -11,7 +11,6 @@ local _ = require("gettext")
 local Device = require("device")
 local Screen = Device.screen
 local PluginShare = require("pluginshare")
-local SyncService = require("frontend/apps/cloudstorage/syncservice")
 local Sync = require("sync")
 local Dispatcher = require("dispatcher")
 local Event = require("ui/event")
@@ -1416,13 +1415,17 @@ end
 -- showCharacterDetails consolidated to implementation at line 2022
 
 function XRayPlugin:manageSyncServer(touchmenu_instance)
+    local cs = self.ui.cloudstorage
+    if not cs then
+        UIManager:show(InfoMessage:new{
+            text = "The Cloud storage plugin is required for syncing but isn't available.",
+            timeout = 3,
+        })
+        return
+    end
     local server = self.settings.sync_server
     local edit_cb = function()
-        local sync_settings = SyncService:new{}
-        sync_settings.onClose = function(this)
-            UIManager:close(this)
-        end
-        sync_settings.onConfirm = function(sv)
+        cs:onShowCloudStorageList(function(sv)
             self.settings.sync_server = sv
             G_reader_settings:saveSetting("xray_sync_server", sv)
             if touchmenu_instance then touchmenu_instance:updateItems() end
@@ -1430,8 +1433,7 @@ function XRayPlugin:manageSyncServer(touchmenu_instance)
                 text = self.loc:t("server_saved"),
                 timeout = 2
             })
-        end
-        UIManager:show(sync_settings)
+        end)
     end
 
     if not server then

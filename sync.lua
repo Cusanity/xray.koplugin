@@ -6,9 +6,9 @@ local lfs = require("libs/libkoreader-lfs")
 local ffiutil = require("ffi/util")
 
 -- We'll use the APIs provided by KOReader
-local WebDavApi = require("apps/cloudstorage/webdavapi")
+local WebDavApi = require("webdavapi")
 -- Dropbox API loading if needed (simplified for now to just check type and load)
-local DropboxApi = require("apps/cloudstorage/dropboxapi")
+local DropboxApi = require("dropboxapi")
 local util = require("util")
 
 local Sync = {}
