@@ -10,9 +10,13 @@ local _ = require("gettext")
 local Device = require("device")
 local Screen = Device.screen
 local PluginShare = require("pluginshare")
-local Sync = require("sync")
 local Dispatcher = require("dispatcher")
 local Event = require("ui/event")
+
+local function newSync()
+    local Sync = require("sync")
+    return Sync:new()
+end
 
 -- prioritize xray in the tools menu
 table.insert(require("ui/elements/reader_menu_order").tools, 1, "xray")
@@ -490,9 +494,6 @@ end
 
 -- Register X-Ray button in the highlight selection menu
 function XRayPlugin:onReaderReady()
-    -- Initialize simple sync
-    self.sync = Sync:new()
-
     logger.info("XRayPlugin: onReaderReady - registering X-Ray button in highlight menu")
 
     -- Add X-Ray button to the highlight dialog
@@ -1650,7 +1651,7 @@ function XRayPlugin:uploadXRayData()
     self:autoLoadCache() -- Ensures self.cache_manager exists
 
     if not self.sync then
-        self.sync = Sync:new()
+        self.sync = newSync()
     end
 
     local book_path = self:getBookPath()
@@ -1710,7 +1711,7 @@ function XRayPlugin:showRemoteMatchPicker()
     UIManager:show(msg)
     UIManager:forceRePaint()
 
-    if not self.sync then self.sync = Sync:new() end
+    if not self.sync then self.sync = newSync() end
 
     local server = self.settings.sync_server
     local api = self.sync:getApi(server)
@@ -1784,7 +1785,7 @@ function XRayPlugin:downloadXRayData(force_download)
         self:autoLoadCache()
 
         if not self.sync then
-            self.sync = Sync:new()
+            self.sync = newSync()
         end
 
         local pd = nil
