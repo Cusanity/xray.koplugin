@@ -1031,6 +1031,14 @@ class _AddModelDialog(QDialog):
         self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
         form.addRow(tr("Provider:"), self.provider_combo)
 
+        self.base_url_label = QLabel(tr("Base URL:"))
+        self.base_url_edit = QLineEdit()
+        self.base_url_edit.setPlaceholderText(tr("http://localhost:8080/v1"))
+        existing_base_url = parent._key_edits.get("XRAY_API_BASE")
+        if existing_base_url:
+            self.base_url_edit.setText(existing_base_url.text().strip())
+        form.addRow(self.base_url_label, self.base_url_edit)
+
         model_row = QHBoxLayout()
         self.model_combo = QComboBox()
         self.model_combo.setEditable(True)
@@ -1060,7 +1068,7 @@ class _AddModelDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
         )
-        btns.accepted.connect(self.accept)
+        btns.accepted.connect(self._accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
 
@@ -1071,6 +1079,12 @@ class _AddModelDialog(QDialog):
         api = self.provider_combo.currentData()
         env_var = _PROVIDER_KEY_MAPPING.get(api, "")
         needs_key = bool(env_var)
+        is_openai = api == "openai"
+        self.base_url_label.setVisible(is_openai)
+        self.base_url_edit.setVisible(is_openai)
+        if is_openai:
+            existing = parent._key_edits.get("XRAY_API_BASE")
+            self.base_url_edit.setText(existing.text().strip() if existing else "")
         self.api_key_label.setVisible(needs_key)
         self.api_key_edit.setVisible(needs_key)
         if needs_key:
@@ -1094,11 +1108,17 @@ class _AddModelDialog(QDialog):
         """Copy the entered API key into the parent's key_edits field."""
         parent: "MainWindow" = self.parent()  # type: ignore[assignment]
         api = self.provider_combo.currentData()
+        if api == "openai" and "XRAY_API_BASE" in parent._key_edits:
+            parent._key_edits["XRAY_API_BASE"].setText(self.base_url_edit.text().strip())
         env_var = _PROVIDER_KEY_MAPPING.get(api, "")
         if env_var and env_var in parent._key_edits:
             key_text = self.api_key_edit.text().strip()
             if key_text:
                 parent._key_edits[env_var].setText(key_text)
+
+    def _accept(self) -> None:
+        self._push_key_to_parent()
+        self.accept()
 
     def _refresh_models(self) -> None:
         if self._model_thread is not None and self._model_thread.isRunning():
@@ -1177,6 +1197,14 @@ class SetupWizard(QWizard):
             self.w_provider_combo.setCurrentIndex(cur_idx)
         self.w_provider_combo.currentIndexChanged.connect(self._on_wizard_provider_changed)
         form.addRow(tr("Provider:"), self.w_provider_combo)
+
+        self.w_base_url_label = QLabel(tr("Base URL:"))
+        self.w_base_url_edit = QLineEdit()
+        self.w_base_url_edit.setPlaceholderText(tr("http://localhost:8080/v1"))
+        existing_base_url = self._parent._key_edits.get("XRAY_API_BASE")
+        if existing_base_url:
+            self.w_base_url_edit.setText(existing_base_url.text().strip())
+        form.addRow(self.w_base_url_label, self.w_base_url_edit)
 
         model_row = QHBoxLayout()
         self.w_model_combo = QComboBox()
@@ -1374,6 +1402,12 @@ class SetupWizard(QWizard):
 
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
         needs_key = bool(env_var)
+        is_openai = provider == "openai"
+        self.w_base_url_label.setVisible(is_openai)
+        self.w_base_url_edit.setVisible(is_openai)
+        if is_openai:
+            existing = self._parent._key_edits.get("XRAY_API_BASE")
+            self.w_base_url_edit.setText(existing.text().strip() if existing else "")
         self.w_api_key_label.setVisible(needs_key)
         self.w_api_key_edit.setVisible(needs_key)
         self.w_show_key.setVisible(needs_key)
@@ -1386,6 +1420,10 @@ class SetupWizard(QWizard):
 
     def _wizard_refresh_models(self) -> None:
         provider = self.w_provider_combo.currentData() or "openai"
+        if provider == "openai" and "XRAY_API_BASE" in self._parent._key_edits:
+            self._parent._key_edits["XRAY_API_BASE"].setText(
+                self.w_base_url_edit.text().strip()
+            )
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
         if env_var and env_var in self._parent._key_edits:
             self._parent._key_edits[env_var].setText(self.w_api_key_edit.text().strip())
@@ -1479,6 +1517,10 @@ class SetupWizard(QWizard):
         self._parent.model_combo.setCurrentText(self.w_model_combo.currentText().strip())
 
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
+        if provider == "openai" and "XRAY_API_BASE" in self._parent._key_edits:
+            self._parent._key_edits["XRAY_API_BASE"].setText(
+                self.w_base_url_edit.text().strip()
+            )
         if env_var and env_var in self._parent._key_edits:
             self._parent._key_edits[env_var].setText(self.w_api_key_edit.text().strip())
 
