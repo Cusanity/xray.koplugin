@@ -428,7 +428,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayQuickMenu",
         title = self.loc:t("quick_menu_title"),
-        general = true,
+        reader = true,
         separator = true,
     })
 
@@ -437,7 +437,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayCharacters",
         title = self.loc:t("menu_characters"),
-        general = true,
+        reader = true,
     })
 
     -- X-Ray Chapter Characters action
@@ -445,7 +445,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayChapterCharacters",
         title = self.loc:t("menu_chapter_characters"),
-        general = true,
+        reader = true,
     })
 
     -- X-Ray Timeline action
@@ -453,7 +453,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayTimeline",
         title = self.loc:t("menu_timeline"),
-        general = true,
+        reader = true,
     })
 
     -- X-Ray Historical Figures action
@@ -461,7 +461,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayHistorical",
         title = self.loc:t("menu_historical_figures"),
-        general = true,
+        reader = true,
     })
 
     -- X-Ray Themes action
@@ -469,7 +469,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayThemes",
         title = self.loc:t("menu_themes"),
-        general = true,
+        reader = true,
     })
 
     -- X-Ray Locations action
@@ -477,7 +477,7 @@ function XRayPlugin:onDispatcherRegisterActions()
         category = "none",
         event = "ShowXRayLocations",
         title = self.loc:t("menu_locations"),
-        general = true,
+        reader = true,
     })
 end
 
@@ -2894,55 +2894,65 @@ function XRayPlugin:showQuickXRayMenu()
     local buttons = {}
 
     if self.xray_data then
-        table.insert(buttons, {
-            {
-                text = self.loc:t("menu_characters"),
-                callback = function()
-                    UIManager:close(self.quick_dialog)
-                    self:showCharacters(true)
-                end,
-            },
-        })
+        if self.settings.show_characters then
+            table.insert(buttons, {
+                {
+                    text = self.loc:t("menu_characters"),
+                    callback = function()
+                        UIManager:close(self.quick_dialog)
+                        self:showCharacters(true)
+                    end,
+                },
+            })
+        end
 
-        table.insert(buttons, {
-            {
-                text = self.loc:t("menu_chapter_characters"),
-                callback = function()
-                    UIManager:close(self.quick_dialog)
-                    self:showChapterCharacters()
-                end,
-            },
-        })
+        if self.settings.show_chapter_characters then
+            table.insert(buttons, {
+                {
+                    text = self.loc:t("menu_chapter_characters"),
+                    callback = function()
+                        UIManager:close(self.quick_dialog)
+                        self:showChapterCharacters()
+                    end,
+                },
+            })
+        end
 
-        table.insert(buttons, {
-            {
-                text = self.loc:t("menu_timeline"),
-                callback = function()
-                    UIManager:close(self.quick_dialog)
-                    self:showTimeline(true)
-                end,
-            },
-        })
+        if self.settings.show_timeline then
+            table.insert(buttons, {
+                {
+                    text = self.loc:t("menu_timeline"),
+                    callback = function()
+                        UIManager:close(self.quick_dialog)
+                        self:showTimeline(true)
+                    end,
+                },
+            })
+        end
 
-        table.insert(buttons, {
-            {
-                text = self.loc:t("menu_historical_figures"),
-                callback = function()
-                    UIManager:close(self.quick_dialog)
-                    self:showHistoricalFigures(true)
-                end,
-            },
-        })
+        if self.settings.show_historical_figures then
+            table.insert(buttons, {
+                {
+                    text = self.loc:t("menu_historical_figures"),
+                    callback = function()
+                        UIManager:close(self.quick_dialog)
+                        self:showHistoricalFigures(true)
+                    end,
+                },
+            })
+        end
 
-        table.insert(buttons, {
-            {
-                text = self.loc:t("menu_character_notes"),
-                callback = function()
-                    UIManager:close(self.quick_dialog)
-                    self:showCharacterNotes()
-                end,
-            },
-        })
+        if self.settings.show_character_notes then
+            table.insert(buttons, {
+                {
+                    text = self.loc:t("menu_character_notes"),
+                    callback = function()
+                        UIManager:close(self.quick_dialog)
+                        self:showCharacterNotes()
+                    end,
+                },
+            })
+        end
     end
 
     -- Show reader progress in title (this is what filtering uses)
