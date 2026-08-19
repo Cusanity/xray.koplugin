@@ -97,6 +97,7 @@ from PyQt6.QtWidgets import (
 
 import ai_client
 import calibre_browser
+import copilot_auth
 import generator
 import retry_config
 import webdav_sync
@@ -110,6 +111,7 @@ from gui_i18n import AVAILABLE_LANGUAGES, tr
 
 PROVIDERS: list[tuple[str, str]] = [
     ("openai", "OpenAI-compatible"),
+    ("copilot", "GitHub Copilot"),
     ("claude", "Anthropic Claude"),
     ("groq", "Groq"),
     ("gemini", "Google Gemini"),
@@ -149,6 +151,7 @@ _PROVIDER_KEY_MAPPING: dict[str, str] = {
 
 _PROVIDER_ICON_COLORS: dict[str, str] = {
     "openai": "#1f7a8c",
+    "copilot": "#24292f",
     "claude": "#8e5c42",
     "groq": "#a24f9b",
     "gemini": "#2e7d32",
@@ -157,6 +160,7 @@ _PROVIDER_ICON_COLORS: dict[str, str] = {
 
 _PROVIDER_ICON_TEXT: dict[str, str] = {
     "openai": "O",
+    "copilot": "Co",
     "claude": "C",
     "groq": "G",
     "gemini": "Ge",
@@ -206,6 +210,8 @@ def status_text(progress: int | None) -> str:
 
 def fetch_models_for(api: str) -> list[str]:
     """Return the available model list for a provider."""
+    if api == "copilot":
+        return ai_client.fetch_copilot_models()
     if api == "claude":
         return ai_client.fetch_claude_models()
     if api == "groq":
@@ -221,6 +227,7 @@ def reset_model_caches() -> None:
     """Clear ai_client's per-provider model caches so a refresh refetches."""
     for name in (
         "_openai_models_cache",
+        "_copilot_models_cache",
         "_claude_models_cache",
         "_groq_models_cache",
         "_gemini_models_cache",
@@ -751,6 +758,26 @@ class ModelFetchWorker(QObject):
             self.failed.emit(str(e))
 
 
+class CopilotLoginWorker(QObject):
+    """Runs GitHub Copilot device login off the UI thread."""
+
+    code = pyqtSignal(str, str, str)  # verification_uri, user_code, message
+    done = pyqtSignal()
+    failed = pyqtSignal(str)
+
+    def run(self) -> None:
+        try:
+            copilot_auth.login_device_flow(
+                message_callback=lambda uri, user_code, message: self.code.emit(
+                    uri, user_code, message
+                )
+            )
+            copilot_auth.get_copilot_token(auto_login=False)
+            self.done.emit()
+        except Exception as e:  # noqa: BLE001
+            self.failed.emit(str(e))
+
+
 class _ChainModelRefreshWorker(QObject):
     """Fetches model lists for multiple providers sequentially in one thread."""
 
@@ -1033,7 +1060,7 @@ class _AddModelDialog(QDialog):
 
         self.base_url_label = QLabel(tr("Base URL:"))
         self.base_url_edit = QLineEdit()
-        self.base_url_edit.setPlaceholderText(tr("http://localhost:8080/v1"))
+        self.base_url_edit.setPlaceholderText("http://localhost:8080/v1")
         existing_base_url = parent._key_edits.get("XRAY_API_BASE")
         if existing_base_url:
             self.base_url_edit.setText(existing_base_url.text().strip())
@@ -1200,7 +1227,7 @@ class SetupWizard(QWizard):
 
         self.w_base_url_label = QLabel(tr("Base URL:"))
         self.w_base_url_edit = QLineEdit()
-        self.w_base_url_edit.setPlaceholderText(tr("http://localhost:8080/v1"))
+        self.w_base_url_edit.setPlaceholderText("http://localhost:8080/v1")
         existing_base_url = self._parent._key_edits.get("XRAY_API_BASE")
         if existing_base_url:
             self.w_base_url_edit.setText(existing_base_url.text().strip())
@@ -1562,6 +1589,7 @@ LITELLM_PRICES_URL = (
 # Maps our provider IDs → the prefixes LiteLLM uses in its catalog.
 _LITELLM_PROVIDER_PREFIXES: dict[str, list[str]] = {
     "openai":   ["", "openai/"],
+    "copilot":  ["github_copilot/", "copilot/", ""],
     "claude":   ["", "anthropic/", "claude/"],
     "groq":     ["groq/", ""],
     "gemini":   ["gemini/", "vertex_ai/gemini/", ""],
@@ -1839,6 +1867,8 @@ class MainWindow(QMainWindow):
         self._proc_worker: ProcessWorker | None = None
         self._model_thread: QThread | None = None
         self._model_worker: ModelFetchWorker | None = None
+        self._copilot_login_thread: QThread | None = None
+        self._copilot_login_worker: CopilotLoginWorker | None = None
         self._balance_thread: QThread | None = None
         self._balance_worker: ProviderBalanceWorker | None = None
         self._active_balance_btn: QPushButton | None = None
@@ -1852,6 +1882,7 @@ class MainWindow(QMainWindow):
         self._chain_model_thread: QThread | None = None
         self._chain_model_worker: _ChainModelRefreshWorker | None = None
         self._deepseek_peak_timer: QTimer | None = None
+        self._copilot_auth_timer: QTimer | None = None
         self._webdav_authenticated = False
         self._wizard_menu_action: QAction | None = None
         self._xray_shortcut_action: QAction | None = None
@@ -1872,12 +1903,18 @@ class MainWindow(QMainWindow):
 
         self._load_prefs_into_ui()
         self._on_provider_changed()
+        self._refresh_copilot_auth_ui()
 
         # Keep DeepSeek peak/off-peak badge in sync with current Beijing time.
         self._deepseek_peak_timer = QTimer(self)
         self._deepseek_peak_timer.setInterval(60_000)
         self._deepseek_peak_timer.timeout.connect(self._refresh_deepseek_pricing_ui)
         self._deepseek_peak_timer.start()
+
+        self._copilot_auth_timer = QTimer(self)
+        self._copilot_auth_timer.setInterval(60_000)
+        self._copilot_auth_timer.timeout.connect(self._refresh_copilot_auth_ui)
+        self._copilot_auth_timer.start()
 
         # Defer slow init (model fetches, filesystem scan, wizard) until after
         # the window is visible so startup feels instant.
@@ -1987,6 +2024,16 @@ class MainWindow(QMainWindow):
         for env_var, _attr, label, is_secret in CLOUD_KEY_FIELDS:
             self._add_key_row(keys_form, env_var, label, is_secret)
         layout.addWidget(keys_box)
+
+        copilot_box = QGroupBox(tr("GitHub Copilot"))
+        copilot_layout = QHBoxLayout(copilot_box)
+        self.copilot_status_label = QLabel("")
+        self.copilot_status_label.setWordWrap(True)
+        self.copilot_login_btn = QPushButton(tr("Login with GitHub"))
+        self.copilot_login_btn.clicked.connect(self._login_copilot)
+        copilot_layout.addWidget(self.copilot_status_label, 1)
+        copilot_layout.addWidget(self.copilot_login_btn)
+        layout.addWidget(copilot_box)
 
         # Calibre library + advanced
         misc_box = QGroupBox(tr("Library & Advanced"))
@@ -3288,10 +3335,15 @@ class MainWindow(QMainWindow):
 
     # =========================================================== provider/model
     def _on_provider_changed(self) -> None:
+        self._refresh_copilot_auth_ui()
         api = self.provider_combo.currentData()
         key_ok = self._provider_key_present(api)
         if key_ok:
             self.provider_hint.setText("")
+        elif api == "copilot":
+            self.provider_hint.setText(
+                tr("Login with GitHub Copilot, then refresh models.")
+            )
         else:
             self.provider_hint.setText(
                 tr(
@@ -3303,9 +3355,104 @@ class MainWindow(QMainWindow):
     def _provider_key_present(self, api: str) -> bool:
         if api == "openai":
             return True  # local endpoints may not need a key
+        if api == "copilot":
+            return copilot_auth.has_github_token()
         env_var = _PROVIDER_KEY_MAPPING.get(api, "")
         edit = self._key_edits.get(env_var)
         return bool(edit and edit.text().strip())
+
+    def _refresh_copilot_auth_ui(self) -> None:
+        if not hasattr(self, "copilot_status_label"):
+            return
+        status = copilot_auth.auth_status()
+        if not status["has_github_token"]:
+            text = tr("Use GitHub device login; no API key is required.")
+            button = tr("Login with GitHub")
+            color = "#666"
+        elif not status["has_copilot_token"]:
+            text = tr("GitHub login saved. Copilot token will be fetched on demand.")
+            button = tr("Re-login with GitHub")
+            color = "#1565c0"
+        else:
+            expires_at = int(status["copilot_expires_at"] or 0)
+            expires_dt = datetime.fromtimestamp(expires_at, timezone.utc).astimezone()
+            expires_text = expires_dt.strftime("%Y-%m-%d %H:%M")
+            if status["copilot_valid"] and status["refresh_needed"]:
+                text = tr("Copilot token expires soon ({time}); it will refresh automatically.").format(
+                    time=expires_text
+                )
+                color = "#b58900"
+            elif status["copilot_valid"]:
+                text = tr("Copilot token valid until {time}.").format(time=expires_text)
+                color = "#2e7d32"
+            else:
+                text = tr("Copilot token expired; it will refresh automatically.")
+                color = "#b58900"
+            button = tr("Re-login with GitHub")
+        self.copilot_status_label.setText(text)
+        self.copilot_status_label.setStyleSheet(f"color: {color};")
+        if self._copilot_login_thread is None:
+            self.copilot_login_btn.setText(button)
+
+    def _login_copilot(self) -> None:
+        if self._copilot_login_thread is not None:
+            return
+        self.copilot_login_btn.setEnabled(False)
+        self.statusBar().showMessage(tr("Starting GitHub Copilot login…"))
+
+        self._copilot_login_thread = QThread()
+        self._copilot_login_worker = CopilotLoginWorker()
+        self._copilot_login_worker.moveToThread(self._copilot_login_thread)
+        self._copilot_login_thread.started.connect(self._copilot_login_worker.run)
+        self._copilot_login_worker.code.connect(self._on_copilot_login_code)
+        self._copilot_login_worker.done.connect(self._on_copilot_login_done)
+        self._copilot_login_worker.failed.connect(self._on_copilot_login_failed)
+        self._copilot_login_worker.done.connect(self._copilot_login_thread.quit)
+        self._copilot_login_worker.failed.connect(self._copilot_login_thread.quit)
+        self._copilot_login_thread.finished.connect(self._cleanup_copilot_login_thread)
+        self._copilot_login_thread.start()
+
+    def _on_copilot_login_code(self, verification_uri: str, user_code: str, message: str) -> None:
+        _ = message
+        QDesktopServices.openUrl(QUrl(verification_uri))
+        QMessageBox.information(
+            self,
+            tr("GitHub Copilot Login"),
+            tr("Open {url} and enter code: {code}").format(
+                url=verification_uri,
+                code=user_code,
+            ),
+        )
+        self.statusBar().showMessage(
+            tr("Waiting for GitHub authorization…"), 4000
+        )
+
+    def _on_copilot_login_done(self) -> None:
+        reset_model_caches()
+        self._refresh_copilot_auth_ui()
+        self._on_provider_changed()
+        self.statusBar().showMessage(tr("GitHub Copilot login complete."), 4000)
+        QMessageBox.information(
+            self,
+            tr("GitHub Copilot Login"),
+            tr("GitHub Copilot login complete. You can refresh models now."),
+        )
+
+    def _on_copilot_login_failed(self, msg: str) -> None:
+        QMessageBox.warning(
+            self,
+            tr("GitHub Copilot Login"),
+            tr("GitHub Copilot login failed: {error}").format(error=msg),
+        )
+        self.statusBar().showMessage(tr("GitHub Copilot login failed."), 4000)
+
+    def _cleanup_copilot_login_thread(self) -> None:
+        self.copilot_login_btn.setEnabled(True)
+        self._refresh_copilot_auth_ui()
+        if self._copilot_login_thread is not None:
+            self._copilot_login_thread.wait()
+        self._copilot_login_thread = None
+        self._copilot_login_worker = None
 
     def _refresh_models(self) -> None:
         if self._model_thread is not None:
@@ -3388,6 +3535,7 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             tr("Loaded {n} models.").format(n=len(models)), 4000
         )
+        self._refresh_copilot_auth_ui()
 
     def _on_models_failed(self, msg: str) -> None:
         QMessageBox.warning(self, tr("Model fetch failed"), msg)

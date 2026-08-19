@@ -100,6 +100,7 @@ from ai_client import (
     configure as configure_ai,
     consolidate_descriptions_batch,
     create_client,
+    fetch_copilot_models,
     fetch_claude_models,
     fetch_deepseek_models,
     fetch_gemini_models,
@@ -852,6 +853,7 @@ def display_api_selector() -> str:
 
     options = [
         ("openai", "OpenAI (Standard)"),
+        ("copilot", "GitHub Copilot (Device Login)"),
         ("claude", "Anthropic Claude (Official)"),
         ("groq", "Groq (Fast Inference)"),
         ("gemini", "Google Gemini (Official)"),
@@ -893,12 +895,14 @@ def display_api_selector() -> str:
 
 def display_model_selector(selected_api: str) -> str | None:
     """Display model selection menu and return selected model name."""
-    from ai_client import MODEL_NAME
+    from ai_client import COPILOT_DEFAULT_MODEL, MODEL_NAME
 
     prefs = _load_preferences()
     last_model = prefs.get("last_model", "")
 
-    if selected_api == "claude":
+    if selected_api == "copilot":
+        current_models = fetch_copilot_models()
+    elif selected_api == "claude":
         current_models = fetch_claude_models()
     elif selected_api == "groq":
         current_models = fetch_groq_models()
@@ -909,7 +913,8 @@ def display_model_selector(selected_api: str) -> str | None:
     else:
         current_models = list(AVAILABLE_MODELS)
 
-    effective_default = last_model if last_model in current_models else MODEL_NAME
+    fallback_default = COPILOT_DEFAULT_MODEL if selected_api == "copilot" else MODEL_NAME
+    effective_default = last_model if last_model in current_models else fallback_default
 
     print(f"\n{'=' * 60}")
     print("Select AI Model")
@@ -1426,6 +1431,8 @@ def main() -> None:
             print("Get your API key at: https://platform.deepseek.com/api_keys")
             return
         print("Using DeepSeek API")
+    elif selected_api == "copilot":
+        print("Using GitHub Copilot API (device login)")
 
     # Select model (once per session)
     selected_model = display_model_selector(selected_api)
@@ -1448,7 +1455,7 @@ def main() -> None:
 
     # Create client
     client = create_client(selected_api)
-    if selected_api in ("claude", "openai", "groq", "gemini", "deepseek") and client is None:
+    if selected_api in ("claude", "openai", "copilot", "groq", "gemini", "deepseek") and client is None:
         return
 
     # First iteration: use CLI path if given, then always show browser

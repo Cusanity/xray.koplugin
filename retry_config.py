@@ -29,6 +29,7 @@ from typing import Any
 # Providers understood by ai_client.create_client / the call dispatcher.
 VALID_PROVIDERS: tuple[str, ...] = (
     "openai",
+    "copilot",
     "claude",
     "groq",
     "gemini",

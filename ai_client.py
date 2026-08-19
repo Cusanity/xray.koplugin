@@ -17,6 +17,7 @@ from typing import Any
 
 from openai import OpenAI
 
+import copilot_auth
 import retry_config
 from retry_config import (
     CooldownRegistry,
@@ -50,6 +51,8 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = "https://api.deepseek.com"
+COPILOT_API_BASE = copilot_auth.COPILOT_API_BASE
+COPILOT_DEFAULT_MODEL = copilot_auth.COPILOT_DEFAULT_MODEL
 MODELS_ENDPOINT = os.environ.get("XRAY_MODELS_ENDPOINT", "http://localhost:8045/v1/models")
 
 
@@ -84,6 +87,7 @@ _groq_models_cache: list[str] | None = None
 _openai_models_cache: list[str] | None = None
 _gemini_models_cache: list[str] | None = None
 _deepseek_models_cache: list[str] | None = None
+_copilot_models_cache: list[str] | None = None
 
 
 def _fetch_openai_models() -> list[str]:
@@ -368,6 +372,7 @@ def auto_max_workers(provider: str | None = None) -> int:
 # Built-in per-provider worker defaults (used when there is no override).
 MAX_WORKERS_DEFAULTS: dict[str, int] = {
     "openai": 1,     # local endpoints are usually single-stream
+    "copilot": 1,    # Copilot tokens/rate limits are per-account; keep sequential
     "groq": 1,       # Groq free tier: 6-12K TPM, must be sequential
     "gemini": 3,
     "deepseek": 5,
@@ -617,6 +622,27 @@ def fetch_groq_models() -> list[str]:
     return []
 
 
+def fetch_copilot_models() -> list[str]:
+    """Fetch available GitHub Copilot chat models for the logged-in account."""
+    global _copilot_models_cache
+    if _copilot_models_cache is not None:
+        return _copilot_models_cache
+
+    if not copilot_auth.has_github_token():
+        return []
+
+    try:
+        models = copilot_auth.fetch_models()
+        if models:
+            _copilot_models_cache = models
+            print(f"  [Copilot] Found {len(models)} models")
+            return _copilot_models_cache
+    except Exception as e:
+        print(f"  [Copilot] Failed to fetch models: {e}")
+
+    return [COPILOT_DEFAULT_MODEL] if COPILOT_DEFAULT_MODEL else []
+
+
 # =============================================================================
 # Client Factory
 # =============================================================================
@@ -668,6 +694,19 @@ def create_client(selected_api: str) -> Any:
             api_key=DEEPSEEK_API_KEY,
             timeout=AI_TIMEOUT_SECONDS,
             max_retries=0,  # our retry chain owns retries
+        )
+    elif selected_api == "copilot":
+        try:
+            token = copilot_auth.get_copilot_token(auto_login=True)
+        except Exception as e:
+            print(f"Error: GitHub Copilot login failed: {e}")
+            return None
+        return OpenAI(
+            base_url=COPILOT_API_BASE,
+            api_key=token,
+            timeout=AI_TIMEOUT_SECONDS,
+            max_retries=0,  # our retry chain owns retries
+            default_headers=copilot_auth.copilot_headers(),
         )
     elif selected_api != "cusanity":
         # OpenAI-compatible endpoint: base URL + key, plus optional
@@ -938,7 +977,8 @@ def _call_openai(
         "max_tokens": max_tokens,
         "timeout": timeout if timeout is not None else AI_TIMEOUT_SECONDS,
     }
-    kwargs["response_format"] = {"type": "json_object"}
+    if _provider != "copilot":
+        kwargs["response_format"] = {"type": "json_object"}
 
     response = client.chat.completions.create(**kwargs)
     usage = getattr(response, "usage", None)
@@ -972,6 +1012,8 @@ def _available_providers() -> set[str]:
         provs.add("gemini")
     if DEEPSEEK_API_KEY:
         provs.add("deepseek")
+    if copilot_auth.has_github_token():
+        provs.add("copilot")
     return provs
 
 
@@ -979,6 +1021,8 @@ def _client_for(provider: str) -> Any:
     """Return a cached client for a provider, building it on first use."""
     if provider == "cusanity":
         return None
+    if provider == "copilot":
+        return create_client(provider)
     client = _client_cache.get(provider)
     if client is None:
         client = create_client(provider)
@@ -1151,7 +1195,7 @@ class _ChainRunner:
         client = _client_for(provider)
         if provider == "claude":
             return _call_claude(client, model, self.messages, temperature, max_tokens, _provider=provider)
-        # "openai", "groq", "gemini", "deepseek" all use the OpenAI-compatible API.
+        # "openai", "copilot", "groq", "gemini", "deepseek" all use the OpenAI-compatible API.
         return _call_openai(
             client, model, self.messages, temperature, max_tokens, timeout, _provider=provider
         )
