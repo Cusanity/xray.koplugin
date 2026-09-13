@@ -88,6 +88,7 @@ def get_xray_base_dir() -> str:
 # Local Module Imports
 # =============================================================================
 
+import ai_client
 from ai_client import (
     AI_TIMEOUT_SECONDS,
     AVAILABLE_MODELS,
@@ -178,10 +179,16 @@ def set_gui_hooks(progress_hook=None, fatal_raises: bool = False) -> None:
     _stop_requested = False
 
 
+def set_use_gemini_batch(enabled: bool) -> None:
+    """Configure whether Google Gemini Batch API is enabled."""
+    ai_client.set_gemini_batch_enabled(enabled)
+
+
 def request_stop() -> None:
     """Signal that the user wants to stop immediately. Thread-safe."""
     global _stop_requested
     _stop_requested = True
+    ai_client.cancel_active_gemini_batch()
 
 
 def _fatal_stop(message: str = "X-Ray chunk processing failed") -> NoReturn:
@@ -500,6 +507,75 @@ def restore_master_from_checkpoint(
     )
 
 
+def _annotate_events_for_chunk(
+    characters: list,
+    chunk_text: str,
+    spine_ranges: list | None,
+    abs_start: int,
+    abs_end: int,
+    start_pct: int,
+    end_pct: int,
+) -> None:
+    """Annotate each event with absolute_percent, xref, and anchor in-place.
+
+    The AI returns an ``anchor`` field — a verbatim quote from the source
+    text. We locate that quote in ``chunk_text`` to get an exact character
+    position, then derive both ``absolute_percent`` and ``xref`` from it.
+    Falls back to mid-chunk when the anchor is absent or not found.
+    """
+    for char in characters:
+        for event in char.get("events", []):
+            anchor = (event.get("anchor") or "").strip()
+            pos = chunk_text.find(anchor) if anchor else -1
+
+            if pos >= 0 and spine_ranges:
+                # Find which spine range the anchor falls in by chunk_text offset.
+                found_sr = spine_ranges[-1]  # default to last range
+                for sr in spine_ranges:
+                    ct_start = sr.get("chunk_text_start", 0)
+                    ct_end = ct_start + (sr["abs_end"] - sr["abs_start"])
+                    if pos < ct_end:
+                        found_sr = sr
+                        break
+
+                ct_start = found_sr.get("chunk_text_start", 0)
+                within_slice = max(0, pos - ct_start)
+                chapter_offset = (
+                    (found_sr["abs_start"] - found_sr.get("chapter_abs_start", found_sr["abs_start"]))
+                    + within_slice
+                )
+                chapter_offset = min(chapter_offset, found_sr["chapter_len"])
+
+                event["xref"] = {
+                    "spine": found_sr["spine"],
+                    "offset": chapter_offset,
+                    "chapter_len": found_sr["chapter_len"],
+                }
+                # absolute_percent: interpolate using real abs book position
+                abs_book_pos = found_sr.get("chapter_abs_start", found_sr["abs_start"]) + chapter_offset
+                chunk_span = abs_end - abs_start
+                if chunk_span > 0:
+                    frac = (abs_book_pos - abs_start) / chunk_span
+                    frac = max(0.0, min(1.0, frac))
+                else:
+                    frac = 0.5
+                event["absolute_percent"] = round(
+                    start_pct + frac * (end_pct - start_pct), 1
+                )
+            else:
+                # Anchor missing or not found — fall back to mid-chunk.
+                if anchor and pos < 0:
+                    event["_anchor_miss"] = True  # debug flag, not persisted
+                mid_frac = 0.5
+                event["absolute_percent"] = round(
+                    start_pct + mid_frac * (end_pct - start_pct), 1
+                )
+                if spine_ranges and abs_end > abs_start:
+                    xref = _compute_xref(50.0, abs_start, abs_end, spine_ranges)
+                    if xref:
+                        event["xref"] = xref
+
+
 def _process_chunk_worker(
     client: Any,
     chunk_text: str,
@@ -519,64 +595,9 @@ def _process_chunk_worker(
     prompt = CHUNK_SUMMARY_PROMPT % (title, author, end_pct, chunk_text)
 
     def _annotate_events(characters: list) -> None:
-        """Annotate each event with absolute_percent, xref, and anchor in-place.
-
-        The AI now returns an ``anchor`` field — a verbatim quote from the source
-        text.  We locate that quote in ``chunk_text`` to get an exact character
-        position, then derive both ``absolute_percent`` and ``xref`` from it.
-        Falls back to mid-chunk when the anchor is absent or not found.
-        """
-        for char in characters:
-            for event in char.get("events", []):
-                anchor = (event.get("anchor") or "").strip()
-                pos = chunk_text.find(anchor) if anchor else -1
-
-                if pos >= 0 and spine_ranges:
-                    # Find which spine range the anchor falls in by chunk_text offset.
-                    found_sr = spine_ranges[-1]  # default to last range
-                    for sr in spine_ranges:
-                        ct_start = sr.get("chunk_text_start", 0)
-                        ct_end = ct_start + (sr["abs_end"] - sr["abs_start"])
-                        if pos < ct_end:
-                            found_sr = sr
-                            break
-
-                    ct_start = found_sr.get("chunk_text_start", 0)
-                    within_slice = max(0, pos - ct_start)
-                    chapter_offset = (
-                        (found_sr["abs_start"] - found_sr.get("chapter_abs_start", found_sr["abs_start"]))
-                        + within_slice
-                    )
-                    chapter_offset = min(chapter_offset, found_sr["chapter_len"])
-
-                    event["xref"] = {
-                        "spine": found_sr["spine"],
-                        "offset": chapter_offset,
-                        "chapter_len": found_sr["chapter_len"],
-                    }
-                    # absolute_percent: interpolate using real abs book position
-                    abs_book_pos = found_sr.get("chapter_abs_start", found_sr["abs_start"]) + chapter_offset
-                    chunk_span = abs_end - abs_start
-                    if chunk_span > 0:
-                        frac = (abs_book_pos - abs_start) / chunk_span
-                        frac = max(0.0, min(1.0, frac))
-                    else:
-                        frac = 0.5
-                    event["absolute_percent"] = round(
-                        start_pct + frac * (end_pct - start_pct), 1
-                    )
-                else:
-                    # Anchor missing or not found — fall back to mid-chunk.
-                    if anchor and pos < 0:
-                        event["_anchor_miss"] = True  # debug flag, not persisted
-                    mid_frac = 0.5
-                    event["absolute_percent"] = round(
-                        start_pct + mid_frac * (end_pct - start_pct), 1
-                    )
-                    if spine_ranges and abs_end > abs_start:
-                        xref = _compute_xref(50.0, abs_start, abs_end, spine_ranges)
-                        if xref:
-                            event["xref"] = xref
+        _annotate_events_for_chunk(
+            characters, chunk_text, spine_ranges, abs_start, abs_end, start_pct, end_pct
+        )
 
     cached_data = get_ai_cache(prompt)
     if cached_data:
@@ -617,10 +638,10 @@ def _process_chunk_worker(
             )
             _fatal_stop(f"Chunk {chunk_index}: safety filter triggered on {model}")
 
-        content = content.replace("```json", "").replace("```", "").strip()
-
         try:
-            chunk_data = json.loads(content)
+            chunk_data = ai_client.parse_response_json(content)
+            if not isinstance(chunk_data, dict):
+                raise ValueError("top-level response is not a JSON object")
             save_ai_cache(prompt, chunk_data)
 
             # If the user message was truncated, re-process the lost chunk_text tail.
@@ -802,17 +823,52 @@ def consolidate_pending_items(
             f"into {math.ceil(len(items) / batch_size)} request(s)"
         )
 
+    def _consolidate_batch_with_recovery(
+        batch: list[dict[str, Any]],
+    ) -> dict[int, str]:
+        if not batch:
+            return {}
+
+        batch_results = consolidate_descriptions_batch(
+            client,
+            batch,
+            SYSTEM_PROMPT,
+            CONSOLIDATE_BATCH_PROMPT,
+        )
+        valid_ids = {int(item["id"]) for item in batch}
+        batch_results = {
+            item_id: text
+            for item_id, text in batch_results.items()
+            if item_id in valid_ids and text
+        }
+        pending = [item for item in batch if int(item["id"]) not in batch_results]
+        if not pending or len(pending) == 1:
+            if pending:
+                print(
+                    f"    [Consolidation] Could not recover item "
+                    f"{pending[0]['id']} after batch retries; keeping raw text."
+                )
+            return batch_results
+
+        midpoint = len(pending) // 2
+        print(
+            f"    [Consolidation] Retrying {len(pending)} unresolved items "
+            "as smaller batches."
+        )
+        for smaller_batch in (pending[:midpoint], pending[midpoint:]):
+            batch_results.update(
+                _consolidate_batch_with_recovery(smaller_batch)
+            )
+        return batch_results
+
     results: dict[int, str] = {}
     with concurrent.futures.ThreadPoolExecutor(
         max_workers=get_max_workers()
     ) as executor:
         futures = [
             executor.submit(
-                consolidate_descriptions_batch,
-                client,
+                _consolidate_batch_with_recovery,
                 batch,
-                SYSTEM_PROMPT,
-                CONSOLIDATE_BATCH_PROMPT,
             )
             for batch in batches
         ]
@@ -999,6 +1055,13 @@ def _calculate_start_step(
     start_step = 1
 
     if resume_pct > 0 and resume_data:
+        if resume_pct >= 100 and resume_data.get("analysis_complete") is not True:
+            print(
+                "Checkpoint reached 100% without a completion marker; "
+                "rebuilding from scratch."
+            )
+            return 1
+
         for idx, (_, _, end_pos, _) in enumerate(chunks):
             chunk_pct = int((end_pos / total_len) * 100)
             if chunk_pct >= resume_pct:
@@ -1028,7 +1091,7 @@ def process_book(target_path: str, client: Any, selected_model: str) -> None:
     output_dir = _setup_output_directory(target_path, create=False)
     if output_dir and os.path.exists(output_dir):
         _, resume_data = find_resume_checkpoint(output_dir)
-        if resume_data and resume_data.get("analysis_progress", 0) == 100:
+        if resume_data and resume_data.get("analysis_complete") is True:
             print(f"Skipping {target_path}: X-Ray data already complete (100%).")
             return
 
@@ -1115,91 +1178,295 @@ def process_book(target_path: str, client: Any, selected_model: str) -> None:
             }
         )
 
-    # Execute chunks in parallel but merge in order
-    with concurrent.futures.ThreadPoolExecutor(
-        max_workers=get_max_workers()
-    ) as executor:
-        futures = {}
+    # Execute chunks: if Gemini Batch API is enabled and provider is gemini,
+    # submit all uncached chunks in a single batch job; otherwise use ThreadPoolExecutor.
+    is_gemini = (get_selected_api() == "gemini")
+    use_gemini_batch = is_gemini and ai_client.is_gemini_batch_enabled()
+
+    if use_gemini_batch:
+        uncached_tasks = []
+        chunk_results: dict[int, dict[str, Any]] = {}
+        failed_batch_tasks: list[dict[str, Any]] = []
+
         for task in chunk_tasks:
             if not task["chunk_text"].strip():
-                print(f"Skipping empty chunk ({task['chunk_index']}/{total_chunks})")
                 continue
-
-            future = executor.submit(
-                _process_chunk_worker,
-                client,
-                task["chunk_text"],
-                task["title"],
-                task["author"],
-                task["start_pct"],
-                task["end_pct"],
-                selected_model,
-                task["chunk_index"],
-                total_chunks,
-                task["chapter_display"],
-                task["abs_start"],
-                task["abs_end"],
-                task["spine_ranges"],
+            prompt = CHUNK_SUMMARY_PROMPT % (
+                task["title"], task["author"], task["end_pct"], task["chunk_text"]
             )
-            futures[task["chunk_index"]] = future
+            task["prompt"] = prompt
+            cached = get_ai_cache(prompt)
+            if cached:
+                chunk_results[task["chunk_index"]] = cached
+            else:
+                uncached_tasks.append(task)
 
-        # Process results in order to maintain sequential data integrity
+        if uncached_tasks:
+            print(
+                f"\n=== Submitting {len(uncached_tasks)} Chunk(s) to Google Gemini Batch API "
+                f"(50% cost discount) ==="
+            )
+            emit_progress(
+                book=title,
+                pct=0,
+                chunk=start_step,
+                total=total_chunks,
+                op="batch_submitting",
+            )
+            parsed_batch: dict[int, dict[str, Any]] = {}
+            try:
+                batch_job = ai_client.submit_gemini_batch_chunks(
+                    model=selected_model,
+                    chunk_tasks=uncached_tasks,
+                    system_prompt=SYSTEM_PROMPT,
+                    temperature=TEMPERATURE,
+                    max_tokens=16384,
+                )
+                print(f"  [Gemini Batch] Created job: {batch_job.name}")
+                emit_progress(
+                    book=title,
+                    pct=0,
+                    chunk=start_step,
+                    total=total_chunks,
+                    op="batch_processing",
+                )
+
+                def _on_batch_status(state: str, elapsed: int) -> None:
+                    job_short = batch_job.name.split("/")[-1] if "/" in batch_job.name else batch_job.name
+                    msg = f"[Gemini Batch] Job {job_short} | Status: {state} ({elapsed}s)"
+                    print(f"  {msg}")
+                    emit_progress(
+                        book=title,
+                        pct=0,
+                        chunk=start_step,
+                        total=total_chunks,
+                        op="batch_running",
+                    )
+
+                finished_job = ai_client.poll_gemini_batch_job(
+                    client=client,
+                    job_name=batch_job.name,
+                    poll_interval=10.0,
+                    on_status=_on_batch_status,
+                    check_stop=lambda: bool(_stop_requested),
+                )
+                parsed_batch = ai_client.parse_gemini_batch_results(
+                    finished_job, uncached_tasks, model=selected_model
+                )
+            except UserStoppedError:
+                raise
+            except Exception as e:
+                print(f"  [Gemini Batch] Error during batch processing: {e}")
+
+            for task in uncached_tasks:
+                idx = task["chunk_index"]
+                data = parsed_batch.get(idx)
+                if isinstance(data, dict) and data:
+                    save_ai_cache(task["prompt"], data)
+                    chunk_results[idx] = data
+                else:
+                    failed_batch_tasks.append(task)
+
+        if failed_batch_tasks:
+            print(
+                f"  [Gemini Batch] Retrying {len(failed_batch_tasks)} missing "
+                "chunk result(s) with regular requests."
+            )
+            for task in failed_batch_tasks:
+                idx = task["chunk_index"]
+                try:
+                    recovered = _process_chunk_worker(
+                        client,
+                        task["chunk_text"],
+                        task["title"],
+                        task["author"],
+                        task["start_pct"],
+                        task["end_pct"],
+                        selected_model,
+                        idx,
+                        total_chunks,
+                        task["chapter_display"],
+                        task["abs_start"],
+                        task["abs_end"],
+                        task["spine_ranges"],
+                    )
+                except UserStoppedError:
+                    raise
+                except Exception as e:
+                    print(f"  [Chunk {idx}] Recovery request failed: {e}")
+                    continue
+                if isinstance(recovered, dict) and recovered:
+                    save_ai_cache(task["prompt"], recovered)
+                    chunk_results[idx] = recovered
+
+        missing_tasks = [
+            task
+            for task in chunk_tasks
+            if task["chunk_text"].strip()
+            and task["chunk_index"] not in chunk_results
+        ]
+        if missing_tasks:
+            missing_indexes = ", ".join(
+                str(task["chunk_index"]) for task in missing_tasks
+            )
+            raise FatalChunkError(
+                "No usable analysis result for chunk(s): " + missing_indexes
+            )
+
+        # Process results in sequential order to maintain master data integrity
         for task in chunk_tasks:
             idx = task["chunk_index"]
-            if idx not in futures:
-                continue
+            chunk_data = chunk_results.get(idx)
+            if chunk_data:
+                _annotate_events_for_chunk(
+                    chunk_data.get("characters", []),
+                    task["chunk_text"],
+                    task["spine_ranges"],
+                    task["abs_start"],
+                    task["abs_end"],
+                    task["start_pct"],
+                    task["end_pct"],
+                )
+                print(
+                    f"\n=== Merging Chunk {idx}/{total_chunks}: "
+                    f"《{task['chapter_display']}》 ==="
+                )
+                master.merge_chunk(chunk_data)
 
-            future = futures[idx]
-            try:
-                chunk_data = future.result()
-                if chunk_data:
-                    print(
-                        f"\n=== Merging Chunk {idx}/{total_chunks}: "
-                        f"《{task['chapter_display']}》 ==="
-                    )
-                    master.merge_chunk(chunk_data)
+                stats = master.get_stats()
+                print(
+                    f"  [Merged] Chars: {stats['characters']}, "
+                    f"Locs: {stats['locations']}, Events: {stats['events']}"
+                )
 
-                    stats = master.get_stats()
-                    print(
-                        f"  [Merged] Chars: {stats['characters']}, "
-                        f"Locs: {stats['locations']}, Events: {stats['events']}"
-                    )
+                emit_progress(
+                    book=title,
+                    pct=task["end_pct"],
+                    chunk=idx,
+                    total=total_chunks,
+                    op="merging",
+                    stats=stats,
+                )
 
-                    emit_progress(
-                        book=title,
-                        pct=task["end_pct"],
-                        chunk=idx,
-                        total=total_chunks,
-                        op="merging",
-                        stats=stats,
-                    )
+                emit_progress(
+                    book=title,
+                    pct=task["end_pct"],
+                    chunk=idx,
+                    total=total_chunks,
+                    op="consolidating",
+                )
+                consolidate_pending_items(client, master, task["end_pct"])
 
-                    emit_progress(
-                        book=title,
-                        pct=task["end_pct"],
-                        chunk=idx,
-                        total=total_chunks,
-                        op="consolidating",
-                    )
-                    consolidate_pending_items(client, master, task["end_pct"])
+                output_data = master.to_output_json(task["end_pct"])
+                filename = os.path.join(output_dir, "xray_data.json")
+                with open(filename, "w", encoding="utf-8") as f:
+                    json.dump(output_data, f, ensure_ascii=False, indent=2)
+                print(f"  Saved {filename}")
 
-                    output_data = master.to_output_json(task["end_pct"])
-                    filename = os.path.join(output_dir, "xray_data.json")
-                    with open(filename, "w", encoding="utf-8") as f:
-                        json.dump(output_data, f, ensure_ascii=False, indent=2)
-                    print(f"  Saved {filename}")
+                emit_progress(
+                    book=title,
+                    pct=task["end_pct"],
+                    chunk=idx,
+                    total=total_chunks,
+                    op="saved_checkpoint",
+                )
+            else:
+                print(f"  [Chunk {idx}] Skipped due to missing data.")
+    else:
+        # Execute chunks in parallel but merge in order
+        missing_chunk_indexes: list[int] = []
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=get_max_workers()
+        ) as executor:
+            futures = {}
+            for task in chunk_tasks:
+                if not task["chunk_text"].strip():
+                    print(f"Skipping empty chunk ({task['chunk_index']}/{total_chunks})")
+                    continue
 
-                    emit_progress(
-                        book=title,
-                        pct=task["end_pct"],
-                        chunk=idx,
-                        total=total_chunks,
-                        op="saved_checkpoint",
-                    )
-                else:
-                    print(f"  [Chunk {idx}] Skipped due to AI failure/filtering.")
-            except Exception as e:
-                print(f"  [Chunk {idx}] Fatal Error in worker: {e}")
+                future = executor.submit(
+                    _process_chunk_worker,
+                    client,
+                    task["chunk_text"],
+                    task["title"],
+                    task["author"],
+                    task["start_pct"],
+                    task["end_pct"],
+                    selected_model,
+                    task["chunk_index"],
+                    total_chunks,
+                    task["chapter_display"],
+                    task["abs_start"],
+                    task["abs_end"],
+                    task["spine_ranges"],
+                )
+                futures[task["chunk_index"]] = future
+
+            # Process results in order to maintain sequential data integrity
+            for task in chunk_tasks:
+                idx = task["chunk_index"]
+                if idx not in futures:
+                    continue
+
+                future = futures[idx]
+                try:
+                    chunk_data = future.result()
+                    if chunk_data:
+                        print(
+                            f"\n=== Merging Chunk {idx}/{total_chunks}: "
+                            f"《{task['chapter_display']}》 ==="
+                        )
+                        master.merge_chunk(chunk_data)
+
+                        stats = master.get_stats()
+                        print(
+                            f"  [Merged] Chars: {stats['characters']}, "
+                            f"Locs: {stats['locations']}, Events: {stats['events']}"
+                        )
+
+                        emit_progress(
+                            book=title,
+                            pct=task["end_pct"],
+                            chunk=idx,
+                            total=total_chunks,
+                            op="merging",
+                            stats=stats,
+                        )
+
+                        emit_progress(
+                            book=title,
+                            pct=task["end_pct"],
+                            chunk=idx,
+                            total=total_chunks,
+                            op="consolidating",
+                        )
+                        consolidate_pending_items(client, master, task["end_pct"])
+
+                        output_data = master.to_output_json(task["end_pct"])
+                        filename = os.path.join(output_dir, "xray_data.json")
+                        with open(filename, "w", encoding="utf-8") as f:
+                            json.dump(output_data, f, ensure_ascii=False, indent=2)
+                        print(f"  Saved {filename}")
+
+                        emit_progress(
+                            book=title,
+                            pct=task["end_pct"],
+                            chunk=idx,
+                            total=total_chunks,
+                            op="saved_checkpoint",
+                        )
+                    else:
+                        print(f"  [Chunk {idx}] Skipped due to AI failure/filtering.")
+                        missing_chunk_indexes.append(idx)
+                except Exception as e:
+                    print(f"  [Chunk {idx}] Fatal Error in worker: {e}")
+                    missing_chunk_indexes.append(idx)
+
+        if missing_chunk_indexes:
+            missing_indexes = ", ".join(str(idx) for idx in missing_chunk_indexes)
+            raise FatalChunkError(
+                "No usable analysis result for chunk(s): " + missing_indexes
+            )
 
     emit_progress(
         book=title, pct=100, chunk=total_chunks, total=total_chunks, op="finalizing"
@@ -1251,6 +1518,7 @@ def _finalize_output(master: MasterData, output_dir: str) -> None:
 
     print("\n=== Finalizing: Deduplicating and Sorting Characters ===")
     final_data = deduplicate_characters(final_data)
+    final_data["analysis_complete"] = True
 
     print(f"\n=== Final Analysis: {len(final_data['timeline'])} timeline events ===")
 

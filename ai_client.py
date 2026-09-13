@@ -30,6 +30,13 @@ try:
 except ImportError:
     anthropic = None
 
+try:
+    from google import genai
+    from google.genai import types as genai_types
+except ImportError:
+    genai = None
+    genai_types = None
+
 # =============================================================================
 # Configuration (loaded from environment)
 # =============================================================================
@@ -49,6 +56,7 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_API_BASE = "https://api.groq.com/openai/v1"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
+GEMINI_USE_BATCH_API = os.environ.get("GEMINI_USE_BATCH_API", "").lower() in ("1", "true", "yes")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = "https://api.deepseek.com"
 COPILOT_API_BASE = copilot_auth.COPILOT_API_BASE
@@ -160,6 +168,55 @@ _max_chunk_overrides: dict[str, int] = {}
 CONSOLIDATE_BATCH_SIZE_DEFAULT = 15
 _consolidate_batch_size = CONSOLIDATE_BATCH_SIZE_DEFAULT
 _consolidate_batch_dynamic = False
+
+# Gemini Batch API state
+_gemini_use_batch_api: bool = GEMINI_USE_BATCH_API
+_active_gemini_batch_job_name: str | None = None
+_active_batch_lock = threading.Lock()
+
+
+def is_gemini_batch_enabled() -> bool:
+    """Return whether Gemini Batch API is enabled."""
+    return _gemini_use_batch_api
+
+
+def set_gemini_batch_enabled(enabled: bool) -> None:
+    """Enable or disable Gemini Batch API."""
+    global _gemini_use_batch_api
+    _gemini_use_batch_api = bool(enabled)
+    os.environ["GEMINI_USE_BATCH_API"] = "true" if enabled else "false"
+
+
+def get_active_gemini_batch_job_name() -> str | None:
+    """Return the name of the currently active Gemini batch job, if any."""
+    with _active_batch_lock:
+        return _active_gemini_batch_job_name
+
+
+def set_active_gemini_batch_job_name(name: str | None) -> None:
+    """Track the currently active Gemini batch job for cancellation."""
+    global _active_gemini_batch_job_name
+    with _active_batch_lock:
+        _active_gemini_batch_job_name = name
+
+
+def cancel_active_gemini_batch() -> bool:
+    """Cancel the currently active Gemini batch job, if any."""
+    with _active_batch_lock:
+        job_name = _active_gemini_batch_job_name
+    if not job_name or genai is None:
+        return False
+    try:
+        client = get_gemini_genai_client()
+        client.batches.cancel(name=job_name)
+        print(f"  [Gemini Batch] Cancelled remote batch job: {job_name}")
+        return True
+    except Exception as e:
+        print(f"  [Gemini Batch] Failed to cancel remote batch job {job_name}: {e}")
+        return False
+    finally:
+        set_active_gemini_batch_job_name(None)
+
 
 # Token usage tracking (accumulated per batch run; keyed by "provider/model").
 _token_lock = threading.Lock()
@@ -541,6 +598,260 @@ def fetch_gemini_models() -> list[str]:
 
 
 # =============================================================================
+# Google Gemini Batch API
+# =============================================================================
+
+
+def get_gemini_genai_client() -> Any:
+    """Return a google.genai.Client instance using GEMINI_API_KEY."""
+    if genai is None:
+        raise RuntimeError(
+            "google-genai module not found. Please install it: pip install google-genai"
+        )
+    api_key = GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("GEMINI_API_KEY environment variable not set.")
+    return genai.Client(api_key=api_key)
+
+
+def submit_gemini_batch_chunks(
+    model: str,
+    chunk_tasks: list[dict[str, Any]],
+    system_prompt: str,
+    temperature: float = 0.4,
+    max_tokens: int = 16384,
+) -> Any:
+    """Submit chunk analysis requests to Google Gemini Batch API.
+
+    Returns the created BatchJob object.
+    """
+    client = get_gemini_genai_client()
+    model_id = model.removeprefix("models/") if model else "gemini-2.5-flash-lite"
+
+    total_chars = sum(len(t.get("prompt", "")) for t in chunk_tasks)
+
+    if total_chars > 3_000_000:
+        import tempfile
+        tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".jsonl", delete=False, encoding="utf-8")
+        try:
+            for task in chunk_tasks:
+                entry = {
+                    "key": str(task["chunk_index"]),
+                    "request": {
+                        "contents": [{"parts": [{"text": task["prompt"]}], "role": "user"}],
+                        "generation_config": {
+                            "temperature": temperature,
+                            "max_output_tokens": max_tokens,
+                            "response_mime_type": "application/json",
+                        },
+                        "system_instruction": {"parts": [{"text": system_prompt}]},
+                    },
+                }
+                tmp.write(json.dumps(entry, ensure_ascii=False) + "\n")
+            tmp.close()
+
+            uploaded = client.files.upload(
+                file=tmp.name,
+                config=genai_types.UploadFileConfig(
+                    display_name=f"xray-batch-{int(time.time())}",
+                    mime_type="jsonl",
+                ),
+            )
+            src = uploaded.name
+        finally:
+            if os.path.exists(tmp.name):
+                try:
+                    os.unlink(tmp.name)
+                except OSError:
+                    pass
+    else:
+        src = []
+        for task in chunk_tasks:
+            src.append(
+                genai_types.InlinedRequest(
+                    contents=[
+                        genai_types.Content(
+                            parts=[genai_types.Part.from_text(text=task["prompt"])],
+                            role="user",
+                        )
+                    ],
+                    metadata={"chunk_index": str(task["chunk_index"])},
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=temperature,
+                        max_output_tokens=max_tokens,
+                        response_mime_type="application/json",
+                    ),
+                )
+            )
+
+    job = client.batches.create(model=model_id, src=src)
+    set_active_gemini_batch_job_name(job.name)
+    return job
+
+
+def poll_gemini_batch_job(
+    client: Any,
+    job_name: str,
+    poll_interval: float = 10.0,
+    on_status: Any | None = None,
+    check_stop: Any | None = None,
+) -> Any:
+    """Poll a Gemini batch job until terminal state or cancellation."""
+    genai_client = get_gemini_genai_client()
+    completed_states = {
+        "JOB_STATE_SUCCEEDED",
+        "JOB_STATE_FAILED",
+        "JOB_STATE_CANCELLED",
+        "JOB_STATE_EXPIRED",
+    }
+    start_time = time.time()
+    cur_job = None
+    consecutive_errors = 0
+
+    while True:
+        if check_stop and check_stop():
+            try:
+                genai_client.batches.cancel(name=job_name)
+            except Exception:
+                pass
+            set_active_gemini_batch_job_name(None)
+            from generator import UserStoppedError
+            raise UserStoppedError("Gemini Batch job cancelled by user.")
+
+        try:
+            cur_job = genai_client.batches.get(name=job_name)
+            consecutive_errors = 0
+        except Exception as e:
+            consecutive_errors += 1
+            if consecutive_errors > 5:
+                set_active_gemini_batch_job_name(None)
+                raise RuntimeError(f"Failed to poll Gemini Batch job {job_name}: {e}") from e
+            time.sleep(poll_interval)
+            continue
+
+        state_name = cur_job.state.name if hasattr(cur_job.state, "name") else str(cur_job.state)
+        elapsed = int(time.time() - start_time)
+
+        if on_status:
+            on_status(state_name, elapsed)
+
+        if state_name in completed_states:
+            break
+
+        time.sleep(poll_interval)
+
+    set_active_gemini_batch_job_name(None)
+
+    if state_name == "JOB_STATE_FAILED":
+        err_msg = cur_job.error.message if cur_job.error and hasattr(cur_job.error, "message") else str(cur_job.error)
+        raise RuntimeError(f"Gemini Batch job failed: {err_msg}")
+    elif state_name in ("JOB_STATE_CANCELLED", "JOB_STATE_EXPIRED"):
+        from generator import UserStoppedError
+        raise UserStoppedError(f"Gemini Batch job ended with state {state_name}.")
+
+    return cur_job
+
+
+def parse_gemini_batch_results(
+    job: Any,
+    chunk_tasks: list[dict[str, Any]],
+    model: str = "gemini-2.5-flash-lite",
+) -> dict[int, dict[str, Any]]:
+    """Extract and parse chunk data from a succeeded Gemini batch job.
+
+    Returns {chunk_index: chunk_data_dict}.
+    """
+    genai_client = get_gemini_genai_client()
+    results: dict[int, dict[str, Any]] = {}
+
+    # Case 1: Inlined responses
+    if job.dest and getattr(job.dest, "inlined_responses", None):
+        inlined = job.dest.inlined_responses
+        for i, item in enumerate(inlined):
+            if i >= len(chunk_tasks):
+                break
+            task = chunk_tasks[i]
+            idx = task["chunk_index"]
+
+            if getattr(item, "error", None):
+                print(f"  [Gemini Batch] Error for chunk {idx}: {item.error}")
+                continue
+
+            resp = getattr(item, "response", None)
+            if not resp or not resp.candidates:
+                print(f"  [Gemini Batch] Empty response for chunk {idx}")
+                continue
+
+            # Record tokens
+            usage = getattr(resp, "usage_metadata", None)
+            p_tok = getattr(usage, "prompt_token_count", 0) if usage else 0
+            c_tok = getattr(usage, "candidates_token_count", 0) if usage else 0
+            _record_tokens("gemini", model, p_tok, c_tok)
+
+            raw_text = ""
+            for part in resp.candidates[0].content.parts:
+                if getattr(part, "text", None):
+                    raw_text += part.text
+
+            if raw_text.strip():
+                try:
+                    data = parse_response_json(raw_text)
+                    if not isinstance(data, dict):
+                        raise ValueError("top-level response is not a JSON object")
+                    results[idx] = data
+                except ValueError as e:
+                    print(f"  [Gemini Batch] JSON parse error in chunk {idx}: {e}")
+
+    # Case 2: Output file
+    elif job.dest and getattr(job.dest, "file_name", None):
+        file_bytes = genai_client.files.download(file=job.dest.file_name)
+        file_text = file_bytes.decode("utf-8")
+
+        for line in file_text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+
+            key = parsed.get("key")
+            try:
+                idx = int(key) if key is not None else None
+            except (ValueError, TypeError):
+                idx = None
+
+            if parsed.get("error"):
+                print(f"  [Gemini Batch] Error in response for chunk {key}: {parsed['error']}")
+                continue
+
+            resp = parsed.get("response", {})
+            candidates = resp.get("candidates", [])
+            if not candidates:
+                continue
+
+            usage = resp.get("usageMetadata", {})
+            p_tok = usage.get("promptTokenCount", 0)
+            c_tok = usage.get("candidatesTokenCount", 0)
+            _record_tokens("gemini", model, p_tok, c_tok)
+
+            parts = candidates[0].get("content", {}).get("parts", [])
+            raw_text = "".join(p.get("text", "") for p in parts)
+            if raw_text.strip() and idx is not None:
+                try:
+                    data = parse_response_json(raw_text)
+                    if not isinstance(data, dict):
+                        raise ValueError("top-level response is not a JSON object")
+                    results[idx] = data
+                except ValueError as e:
+                    print(f"  [Gemini Batch] JSON parse error in chunk {idx}: {e}")
+
+    return results
+
+
+# =============================================================================
 # Claude Model Fetching
 # =============================================================================
 
@@ -792,6 +1103,46 @@ def repair_json_quotes(text: str) -> str:
     return text
 
 
+def repair_json_trailing_commas(text: str) -> str:
+    """Remove commas immediately before JSON object or array terminators."""
+    repaired: list[str] = []
+    in_string = False
+    escaped = False
+    index = 0
+
+    while index < len(text):
+        char = text[index]
+        if in_string:
+            repaired.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            index += 1
+            continue
+
+        if char == '"':
+            in_string = True
+            repaired.append(char)
+            index += 1
+            continue
+
+        if char == ",":
+            next_index = index + 1
+            while next_index < len(text) and text[next_index].isspace():
+                next_index += 1
+            if next_index < len(text) and text[next_index] in "}]":
+                index += 1
+                continue
+
+        repaired.append(char)
+        index += 1
+
+    return "".join(repaired)
+
+
 def _is_truncated_json(text: str, error: json.JSONDecodeError) -> bool:
     """Return True if JSON looks truncated (token limit) rather than just malformed."""
     stripped = text.rstrip()
@@ -811,7 +1162,7 @@ def validate_response_json(content: str) -> str:
     Raises ValueError if JSON is invalid after all repair attempts.
     Raises TruncatedJSONError (subclass of ValueError) if truncation is detected.
     """
-    text = extract_json_content(content)
+    text = repair_json_trailing_commas(extract_json_content(content))
     try:
         json.loads(text)
         return text
@@ -821,12 +1172,17 @@ def validate_response_json(content: str) -> str:
                 f"Truncated JSON response (token limit?): {text[:80]}..."
             ) from first_err
         # Try repairing unescaped quotes (common in Chinese text from all providers)
-        text = repair_json_quotes(text)
+        text = repair_json_trailing_commas(repair_json_quotes(text))
         try:
             json.loads(text)
             return text
         except json.JSONDecodeError:
             raise ValueError(f"Invalid JSON after repair: {content[:100]}...")
+
+
+def parse_response_json(content: str) -> Any:
+    """Validate, repair, and decode an AI response as JSON."""
+    return json.loads(validate_response_json(content))
 
 
 class TruncatedJSONError(ValueError):
@@ -1375,7 +1731,9 @@ def consolidate_description_with_ai(
         content = response.choices[0].message.content
         if content:
             content = content.replace("```json", "").replace("```", "").strip()
-            result = json.loads(content)
+            result = parse_response_json(content)
+            if not isinstance(result, dict):
+                raise ValueError("top-level response is not a JSON object")
             save_ai_cache(prompt, result)
             return result.get("description", combined_desc)
     except json.JSONDecodeError as e:
@@ -1421,7 +1779,9 @@ def consolidate_summary_with_ai(
         content = response.choices[0].message.content
         if content:
             content = content.replace("```json", "").replace("```", "").strip()
-            result = json.loads(content)
+            result = parse_response_json(content)
+            if not isinstance(result, dict):
+                raise ValueError("top-level response is not a JSON object")
             save_ai_cache(prompt, result)
             return result.get("summary", combined_summary)
     except json.JSONDecodeError as e:
@@ -1487,7 +1847,9 @@ def consolidate_descriptions_batch(
             return {}
 
         content = content.replace("```json", "").replace("```", "").strip()
-        result = json.loads(content)
+        result = parse_response_json(content)
+        if not isinstance(result, dict):
+            raise ValueError("top-level response is not a JSON object")
         save_ai_cache(prompt, result)
 
         out: dict[int, str] = {}

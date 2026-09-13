@@ -671,7 +671,8 @@ class ProcessWorker(QObject):
     def __init__(self, paths: list[str], api: str, model: str,
                  device: str, auto_push: bool,
                  webdav_cfg: "webdav_sync.WebDavConfig | None" = None,
-                 webdav_auto: bool = False) -> None:
+                 webdav_auto: bool = False,
+                 use_gemini_batch: bool = False) -> None:
         super().__init__()
         self._paths = paths
         self._api = api
@@ -680,10 +681,12 @@ class ProcessWorker(QObject):
         self._auto_push = auto_push
         self._webdav_cfg = webdav_cfg
         self._webdav_auto = webdav_auto
+        self._use_gemini_batch = use_gemini_batch
         self._stop = False
 
     def stop(self) -> None:
         self._stop = True
+        ai_client.cancel_active_gemini_batch()
         generator.request_stop()
 
     def run(self) -> None:
@@ -692,6 +695,8 @@ class ProcessWorker(QObject):
         sys.stdout = _StdoutRedirector(self.log.emit)
         try:
             ai_client.configure(selected_api=self._api, selected_model=self._model)
+            ai_client.set_gemini_batch_enabled(self._use_gemini_batch)
+            generator.set_use_gemini_batch(self._use_gemini_batch)
             client = ai_client.create_client(self._api)
             if client is None:
                 self.log.emit(
@@ -1267,6 +1272,11 @@ class SetupWizard(QWizard):
         self.w_provider_hint.setWordWrap(True)
         form.addRow("", self.w_provider_hint)
 
+        self.w_gemini_batch_chk = QCheckBox(
+            tr("Use Gemini Batch API (50% cost discount)")
+        )
+        form.addRow("", self.w_gemini_batch_chk)
+
         self._on_wizard_provider_changed()
         return page
 
@@ -1444,6 +1454,10 @@ class SetupWizard(QWizard):
         else:
             self.w_api_key_edit.clear()
             self.w_provider_hint.setText(tr("OpenAI-compatible endpoints may work without an API key."))
+        is_gemini = provider == "gemini"
+        self.w_gemini_batch_chk.setVisible(is_gemini)
+        if is_gemini and hasattr(self._parent, "gemini_batch_chk"):
+            self.w_gemini_batch_chk.setChecked(self._parent.gemini_batch_chk.isChecked())
 
     def _wizard_refresh_models(self) -> None:
         provider = self.w_provider_combo.currentData() or "openai"
@@ -1550,6 +1564,8 @@ class SetupWizard(QWizard):
             )
         if env_var and env_var in self._parent._key_edits:
             self._parent._key_edits[env_var].setText(self.w_api_key_edit.text().strip())
+        if provider == "gemini" and hasattr(self._parent, "gemini_batch_chk"):
+            self._parent.gemini_batch_chk.setChecked(self.w_gemini_batch_chk.isChecked())
 
         self._parent.calibre_edit.setText(self.w_calibre_edit.text().strip())
         self._parent.xray_output_edit.setText(self.w_output_edit.text().strip())
@@ -2024,6 +2040,9 @@ class MainWindow(QMainWindow):
         for env_var, _attr, label, is_secret in CLOUD_KEY_FIELDS:
             self._add_key_row(keys_form, env_var, label, is_secret)
         layout.addWidget(keys_box)
+
+        # Google Gemini-specific features (Batch API)
+        layout.addWidget(self._build_gemini_box())
 
         copilot_box = QGroupBox(tr("GitHub Copilot"))
         copilot_layout = QHBoxLayout(copilot_box)
@@ -2555,6 +2574,7 @@ class MainWindow(QMainWindow):
         self._chain_set_balance_cell(r, provider)
         if self._price_catalog:
             self._chain_fill_cost_row(r, provider, model)
+        self._update_gemini_batch_ui()
 
     def _chain_set_balance_cell(self, r: int, provider: str) -> None:
         """Render the Balance API column widget based on provider support."""
@@ -2681,6 +2701,7 @@ class MainWindow(QMainWindow):
             mdl_widget.blockSignals(False)
         self._chain_set_balance_cell(r, provider)
         self._chain_refresh_cost_row(r)
+        self._update_gemini_batch_ui()
 
     def _open_add_model_dialog(self) -> None:
         """Open the provider/model picker popup and add the result to the chain."""
@@ -2711,6 +2732,7 @@ class MainWindow(QMainWindow):
         r = self.chain_table.currentRow()
         if r >= 0:
             self.chain_table.removeRow(r)
+            self._update_gemini_batch_ui()
 
     def _chain_move(self, delta: int) -> None:
         table = self.chain_table
@@ -2829,6 +2851,15 @@ class MainWindow(QMainWindow):
             lines.append(
                 tr("Wait between cycles: {n:.0f}s").format(n=opts.inter_cycle_wait)
             )
+        if (
+            hasattr(self, "gemini_batch_chk")
+            and self.gemini_batch_chk.isChecked()
+            and self._active_provider() == "gemini"
+        ):
+            lines.append("")
+            lines.append(
+                tr("  \u2022 Gemini Batch API: enabled (50% cost discount, async processing)")
+            )
         return "\n".join(lines)
 
     def _populate_chain_table(self, chain: RetryChain) -> None:
@@ -2848,6 +2879,57 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             self.chain_on_exhausted.setCurrentIndex(idx)
         self.chain_honor_retry_after.setChecked(opts.honor_retry_after)
+        self._update_gemini_batch_ui()
+
+    # ============================================================= google gemini
+    def _active_provider(self) -> str:
+        if hasattr(self, "chain_table") and hasattr(self, "chain_max_cycles"):
+            chain = self._chain_from_ui()
+            if chain.primary is not None:
+                return chain.primary.provider
+        if hasattr(self, "provider_combo"):
+            return self.provider_combo.currentData() or "openai"
+        return "openai"
+
+    def _build_gemini_box(self) -> QGroupBox:
+        gemini_box = QGroupBox(tr("Google Gemini"))
+        gemini_layout = QVBoxLayout(gemini_box)
+        self.gemini_batch_chk = QCheckBox(
+            tr("Use Gemini Batch API (50% cost discount)")
+        )
+        self.gemini_batch_chk.toggled.connect(self._on_gemini_batch_toggled)
+        gemini_layout.addWidget(self.gemini_batch_chk)
+
+        hint = QLabel(
+            tr(
+                "Submit chunk analysis to Google's Batch API for 50% cost savings. "
+                "Chunks are processed asynchronously (SLO up to 24h, often minutes)."
+            )
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #666; font-size: 11px;")
+        gemini_layout.addWidget(hint)
+        self._update_gemini_batch_ui()
+        return gemini_box
+
+    def _on_gemini_batch_toggled(self, checked: bool) -> None:
+        ai_client.set_gemini_batch_enabled(checked)
+        generator.set_use_gemini_batch(checked)
+        self._prefs["gemini_batch_api"] = checked
+
+    def _update_gemini_batch_ui(self) -> None:
+        if not hasattr(self, "gemini_batch_chk"):
+            return
+        is_gemini = (self._active_provider() == "gemini")
+        self.gemini_batch_chk.setEnabled(is_gemini)
+        if is_gemini:
+            self.gemini_batch_chk.setToolTip(
+                tr("Use Google Gemini Batch API for 50% cost savings.")
+            )
+        else:
+            self.gemini_batch_chk.setToolTip(
+                tr("Batch API is only supported when Google Gemini is the selected provider.")
+            )
 
     # ================================================ performance / limits editor
     _LIMIT_COLS = ("Provider", "Max Workers", "Max Chunk Size (chars)")
@@ -3024,6 +3106,12 @@ class MainWindow(QMainWindow):
         self.consolidation_dynamic_chk.setChecked(
             bool(self._prefs.get("consolidation_batch_dynamic", True))
         )
+        if hasattr(self, "gemini_batch_chk"):
+            use_batch = bool(self._prefs.get("gemini_batch_api", False))
+            self.gemini_batch_chk.setChecked(use_batch)
+            ai_client.set_gemini_batch_enabled(use_batch)
+            generator.set_use_gemini_batch(use_batch)
+        self._update_gemini_batch_ui()
 
     def _open_setup_wizard(self) -> None:
         if not self._setup_wizard_has_launched():
@@ -3183,6 +3271,7 @@ class MainWindow(QMainWindow):
                 "xray_output_dir": self.xray_output_edit.text().strip(),
                 "temperature": self.temp_spin.value(),
                 "gui_lang": self.lang_combo.currentData(),
+                "gemini_batch_api": self.gemini_batch_chk.isChecked() if hasattr(self, "gemini_batch_chk") else False,
                 "retry_chain": [e.to_dict() for e in chain.entries],
                 "retry_chain_options": chain.options.to_dict(),
                 "max_workers": workers,
@@ -3220,6 +3309,11 @@ class MainWindow(QMainWindow):
         temp = float(self.temp_spin.value())
         ai_client.TEMPERATURE = temp
         generator.TEMPERATURE = temp
+        if hasattr(self, "gemini_batch_chk"):
+            use_batch = self.gemini_batch_chk.isChecked()
+            ai_client.set_gemini_batch_enabled(use_batch)
+            generator.set_use_gemini_batch(use_batch)
+            self._prefs["gemini_batch_api"] = use_batch
         # Push per-provider concurrency / chunk-size overrides into the backend.
         workers, chunk = self._limits_from_ui()
         ai_client.configure_performance(
@@ -3257,6 +3351,10 @@ class MainWindow(QMainWindow):
                         self.calibre_edit.setText(value)
                     elif key == "XRAY_OUTPUT_DIR":
                         self.xray_output_edit.setText(value)
+                    elif key == "GEMINI_USE_BATCH_API":
+                        val = value.lower() in ("1", "true", "yes", "on")
+                        if hasattr(self, "gemini_batch_chk"):
+                            self.gemini_batch_chk.setChecked(val)
         except OSError as e:
             QMessageBox.warning(self, tr("Load .env failed"), str(e))
             return
@@ -3279,6 +3377,10 @@ class MainWindow(QMainWindow):
         model = self.model_combo.currentText().strip()
         if model:
             lines.append(f"XRAY_MODEL={model}")
+        if hasattr(self, "gemini_batch_chk"):
+            lines.append(
+                f"GEMINI_USE_BATCH_API={'true' if self.gemini_batch_chk.isChecked() else 'false'}"
+            )
         try:
             with open(path, "w", encoding="utf-8") as f:
                 f.write("\n".join(lines) + "\n")
@@ -3336,6 +3438,7 @@ class MainWindow(QMainWindow):
     # =========================================================== provider/model
     def _on_provider_changed(self) -> None:
         self._refresh_copilot_auth_ui()
+        self._update_gemini_batch_ui()
         api = self.provider_combo.currentData()
         key_ok = self._provider_key_present(api)
         if key_ok:
@@ -3783,9 +3886,15 @@ class MainWindow(QMainWindow):
             )
         )
 
+        use_batch = bool(
+            api == "gemini"
+            and hasattr(self, "gemini_batch_chk")
+            and self.gemini_batch_chk.isChecked()
+        )
         self._proc_thread = QThread()
         self._proc_worker = ProcessWorker(
-            paths, api, model, device, auto_push, webdav_cfg, webdav_auto
+            paths, api, model, device, auto_push, webdav_cfg, webdav_auto,
+            use_gemini_batch=use_batch,
         )
         self._proc_worker.moveToThread(self._proc_thread)
         self._proc_thread.started.connect(self._proc_worker.run)
