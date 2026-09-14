@@ -168,7 +168,7 @@ CALIBRE_LIBRARY=/path/to/your/Calibre Library
 
 | 标签页 | 功能 |
 |--------|------|
-| **Configuration** | 选择提供商（OpenAI 兼容 / Claude / Groq / Gemini / DeepSeek）、在线获取模型列表、填写 API 密钥、设置 Calibre 路径与温度，一键读写 `.env`；通过**重试/回退链**配置多模型串联（失败时自动切换），「生成 X-Ray」按钮旁有 **ⓘ** 图标，悬停即显示当前模型链摘要 |
+| **Configuration** | 选择提供商（OpenAI 兼容 / Claude / Groq / Gemini / DeepSeek）、在线获取模型列表、填写 API 密钥、设置 Calibre 路径与温度，一键读写 `.env`；通过**重试/回退链**配置多模型串联（失败时自动切换），编辑每个提供商的并发 / 分块限制，并检查余额 / 成本 |
 | **Books** | 从 Calibre 书库扫描书籍（支持自动检测书库位置），支持筛选、多选、手动添加 EPUB；**刷新全部** / **刷新所选** 更新 WebDAV 同步状态；**从 WebDAV 删除所选** 一键删除远程文件夹；清理残留文件夹；开始 / 停止分析；每本书显示 X-Ray 进度（未开始 / 部分 % / 完成）及 WebDAV 同步状态 |
 | **Progress** | 批量进度条、分块计数、实时角色 / 地点 / 事件统计、流式日志控制台；批处理完成后自动弹出**令牌用量与费用摘要**（价格实时从 [LiteLLM 社区目录](https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json) 获取） |
 | **Sync** | Wi-Fi 推送到设备（从PC接收）或上传 / 下载 / 删除 WebDAV 服务器上的 X-Ray 数据 |

@@ -62,6 +62,7 @@ from PyQt6.QtWidgets import (
     QAbstractScrollArea,
     QAbstractSpinBox,
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -69,6 +70,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
@@ -76,13 +78,16 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSplitter,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -99,6 +104,7 @@ import ai_client
 import calibre_browser
 import copilot_auth
 import generator
+import md3_theme
 import retry_config
 import webdav_sync
 from retry_config import RetryChain, RetryChainOptions, RetryEntry
@@ -151,7 +157,7 @@ _PROVIDER_KEY_MAPPING: dict[str, str] = {
 
 _PROVIDER_ICON_COLORS: dict[str, str] = {
     "openai": "#1f7a8c",
-    "copilot": "#24292f",
+    "copilot": "#6e40c9",
     "claude": "#8e5c42",
     "groq": "#a24f9b",
     "gemini": "#2e7d32",
@@ -535,7 +541,7 @@ def populate_provider_combo(combo: QComboBox) -> None:
     """Fill a provider combo with localized labels and provider icons."""
     combo.clear()
     combo.setIconSize(QSize(_PROVIDER_ICON_SIZE, _PROVIDER_ICON_SIZE))
-    combo.setMinimumHeight(provider_row_height())
+    combo.setMinimumHeight(34)
     for key, label in PROVIDERS:
         combo.addItem(provider_icon(key), tr(label), key)
     view = combo.view()
@@ -561,11 +567,34 @@ def provider_table_item(provider_key: str) -> QTableWidgetItem:
 
 def provider_row_height() -> int:
     """Return a cross-platform row height that keeps provider icon/text aligned."""
-    app = QApplication.instance()
-    if app is None:
-        return 24
-    fm = QFontMetrics(QApplication.font())
-    return max(24, _PROVIDER_ICON_SIZE + 8, fm.height() + 8)
+    return 48
+
+
+def wrap_cell_widget(
+    w: QWidget,
+    max_w: int | None = None,
+    align: Qt.AlignmentFlag | None = None,
+    margins: tuple[int, int, int, int] = (4, 5, 4, 5),
+) -> QWidget:
+    """Wrap an interactive widget in a cell container to enforce padding and avoid border collisions."""
+    container = QWidget()
+    container.inner_widget = w
+    layout = QHBoxLayout(container)
+    layout.setContentsMargins(*margins)
+    if align is not None:
+        layout.setAlignment(align)
+    if max_w is not None:
+        w.setMaximumWidth(max_w)
+    layout.addWidget(w)
+    return container
+
+
+def unwrap_cell_widget(w: QWidget | None) -> QWidget | None:
+    """Retrieve the inner interactive widget from a cell container."""
+    if w is None:
+        return None
+    return getattr(w, "inner_widget", w)
+
 
 
 def test_device(device: str) -> tuple[bool, str]:
@@ -965,15 +994,17 @@ class WebDavFolderDialog(QDialog):
         layout.addWidget(self._tree, 1)
 
         self._status_lbl = QLabel("")
-        self._status_lbl.setStyleSheet("color: #666;")
+        self._status_lbl.setProperty("class", "hint")
         layout.addWidget(self._status_lbl)
 
         btn_row = QHBoxLayout()
         btn_row.addStretch(1)
         ok_btn = QPushButton(tr("Select This Folder"))
+        ok_btn.setProperty("role", "filled")
         ok_btn.clicked.connect(self.accept)
         btn_row.addWidget(ok_btn)
         cancel_btn = QPushButton(tr("Cancel"))
+        cancel_btn.setProperty("role", "text")
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
         layout.addLayout(btn_row)
@@ -1081,6 +1112,7 @@ class _AddModelDialog(QDialog):
         if cur_model:
             self.model_combo.setCurrentText(cur_model)
         self.refresh_btn = QPushButton(tr("Refresh"))
+        self.refresh_btn.setProperty("role", "tonal")
         self.refresh_btn.clicked.connect(self._refresh_models)
         model_row.addWidget(self.model_combo, 1)
         model_row.addWidget(self.refresh_btn)
@@ -1100,6 +1132,12 @@ class _AddModelDialog(QDialog):
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
         )
+        ok_btn = btns.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setProperty("role", "filled")
+        cancel_btn = btns.button(QDialogButtonBox.StandardButton.Cancel)
+        if cancel_btn is not None:
+            cancel_btn.setProperty("role", "text")
         btns.accepted.connect(self._accept)
         btns.rejected.connect(self.reject)
         layout.addWidget(btns)
@@ -1216,6 +1254,23 @@ class SetupWizard(QWizard):
         self.addPage(self._build_sync_page())
         self.addPage(self._build_finish_page())
 
+        self.setButtonText(QWizard.WizardButton.NextButton, tr("Next"))
+        self.setButtonText(QWizard.WizardButton.BackButton, tr("Back"))
+        self.setButtonText(QWizard.WizardButton.FinishButton, tr("Finish"))
+        self.setButtonText(QWizard.WizardButton.CancelButton, tr("Cancel"))
+
+        for btn_id, role in [
+            (QWizard.WizardButton.NextButton, "filled"),
+            (QWizard.WizardButton.FinishButton, "filled"),
+            (QWizard.WizardButton.BackButton, "outlined"),
+            (QWizard.WizardButton.CancelButton, "text"),
+        ]:
+            b = self.button(btn_id)
+            if b is not None:
+                b.setProperty("role", role)
+                b.style().unpolish(b)
+                b.style().polish(b)
+
     def _build_provider_page(self) -> QWizardPage:
         page = QWizardPage()
         page.setTitle(tr("Provider & Model"))
@@ -1268,7 +1323,7 @@ class SetupWizard(QWizard):
         form.addRow(self.w_api_key_label, key_row_w)
 
         self.w_provider_hint = QLabel("")
-        self.w_provider_hint.setStyleSheet("color: #666;")
+        self.w_provider_hint.setProperty("class", "hint")
         self.w_provider_hint.setWordWrap(True)
         form.addRow("", self.w_provider_hint)
 
@@ -1662,7 +1717,8 @@ class CostSummaryDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(tr("Batch Complete – Token Usage & Cost"))
-        self.setMinimumWidth(640)
+        self.setMinimumWidth(820)
+        self.resize(860, 420)
         self._usage = usage  # {provider/model: {prompt: int, completion: int}}
         self._fetch_thread: QThread | None = None
         self._fetcher: _PriceFetcher | None = None
@@ -1695,6 +1751,7 @@ class CostSummaryDialog(QDialog):
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
         hh = self._table.horizontalHeader()
+        hh.setMinimumSectionSize(110)
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
@@ -1702,33 +1759,42 @@ class CostSummaryDialog(QDialog):
         hh.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
 
+        tab_font = QFont("Consolas", 9)
         for r, (prov, mdl, counts) in enumerate(self._rows):
             self._table.setItem(r, 0, provider_table_item(prov))
             self._table.setItem(r, 1, QTableWidgetItem(mdl))
-            self._table.setItem(r, 2, QTableWidgetItem(f"{counts['prompt']:,}"))
-            self._table.setItem(r, 3, QTableWidgetItem(f"{counts['completion']:,}"))
-            chars = counts.get("chars", 0)
-            self._table.setItem(r, 4, QTableWidgetItem(f"{chars:,}" if chars else "—"))
-            self._table.setItem(r, 5, QTableWidgetItem("…"))
+            for c_idx, val in [
+                (2, f"{counts['prompt']:,}"),
+                (3, f"{counts['completion']:,}"),
+                (4, f"{counts.get('chars', 0):,}" if counts.get("chars", 0) else "—"),
+                (5, "…"),
+            ]:
+                it = QTableWidgetItem(val)
+                it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                it.setFont(tab_font)
+                self._table.setItem(r, c_idx, it)
 
         layout.addWidget(self._table)
 
         self._status_label = QLabel(tr("Fetching prices from LiteLLM catalog…"))
-        self._status_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._status_label.setProperty("class", "caption")
         self._status_label.setOpenExternalLinks(True)
         self._status_label.setTextFormat(Qt.TextFormat.RichText)
         layout.addWidget(self._status_label)
 
         self._total_label = QLabel("")
-        self._total_label.setStyleSheet("font-weight: bold;")
+        self._total_label.setProperty("class", "bold")
         layout.addWidget(self._total_label)
 
         self._pricing_note_label = QLabel("")
-        self._pricing_note_label.setStyleSheet("color: #666; font-size: 11px;")
+        self._pricing_note_label.setProperty("class", "caption")
         self._pricing_note_label.setWordWrap(True)
         layout.addWidget(self._pricing_note_label)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        ok_btn = btn_box.button(QDialogButtonBox.StandardButton.Ok)
+        if ok_btn is not None:
+            ok_btn.setProperty("role", "filled")
         btn_box.accepted.connect(self.accept)
         layout.addWidget(btn_box)
 
@@ -1849,14 +1915,35 @@ class _ChainInfoLabel(QLabel):
         super().__init__("ⓘ", parent)
         self._tooltip_fn = tooltip_fn
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setStyleSheet(
-            "color: #1565c0; font-weight: bold; font-size: 13px; padding: 0 2px;"
-        )
+        self.setProperty("role", "info")
 
     def event(self, e: QEvent) -> bool:  # type: ignore[override]
         if e.type() == QEvent.Type.ToolTip:
             self.setToolTip(self._tooltip_fn())
         return super().event(e)
+
+
+class _AdaptiveStackedWidget(QStackedWidget):
+    """Stacked widget whose size hint dynamically matches its current widget."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.currentChanged.connect(self._on_page_changed)
+
+    def _on_page_changed(self, idx: int) -> None:
+        self.updateGeometry()
+
+    def sizeHint(self) -> QSize:
+        cw = self.currentWidget()
+        if cw is not None:
+            return cw.sizeHint()
+        return super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:
+        cw = self.currentWidget()
+        if cw is not None:
+            return cw.minimumSizeHint()
+        return super().minimumSizeHint()
 
 
 # =============================================================================
@@ -1872,6 +1959,11 @@ class MainWindow(QMainWindow):
         # Activate the UI language before any widgets/strings are created.
         import gui_i18n
         gui_i18n.set_language(self._prefs.get("gui_lang"))
+
+        self._is_dark: bool = bool(self._prefs.get("is_dark", False))
+        app = QApplication.instance()
+        if app is not None:
+            md3_theme.apply_theme(app, self._is_dark)
 
         self.setWindowTitle(tr("X-Ray Generator"))
         self.resize(1100, 760)
@@ -1950,6 +2042,19 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(act_quit)
 
+        view_menu = self.menuBar().addMenu(tr("&View"))
+        theme_menu = view_menu.addMenu(tr("Theme"))
+        self._act_theme_light = QAction(tr("Light Mode"), self)
+        self._act_theme_light.setCheckable(True)
+        self._act_theme_light.setChecked(not self._is_dark)
+        self._act_theme_light.triggered.connect(lambda: self._set_theme(False))
+        self._act_theme_dark = QAction(tr("Dark Mode"), self)
+        self._act_theme_dark.setCheckable(True)
+        self._act_theme_dark.setChecked(self._is_dark)
+        self._act_theme_dark.triggered.connect(lambda: self._set_theme(True))
+        theme_menu.addAction(self._act_theme_light)
+        theme_menu.addAction(self._act_theme_dark)
+
         self._wizard_menu_action = self.menuBar().addAction("")
         self._wizard_menu_action.triggered.connect(self._open_setup_wizard)
         self._refresh_setup_wizard_menu_action()
@@ -1958,6 +2063,19 @@ class MainWindow(QMainWindow):
             tr("Create Desktop Shortcut")
         )
         self._xray_shortcut_action.triggered.connect(self._create_desktop_shortcut)
+
+    def _set_theme(self, is_dark: bool) -> None:
+        self._is_dark = is_dark
+        self._prefs["is_dark"] = is_dark
+        calibre_browser._save_preferences(self._prefs)
+        if hasattr(self, "_act_theme_light"):
+            self._act_theme_light.setChecked(not is_dark)
+        if hasattr(self, "_act_theme_dark"):
+            self._act_theme_dark.setChecked(is_dark)
+        app = QApplication.instance()
+        if app is not None:
+            md3_theme.apply_theme(app, is_dark)
+        self._populate_table()
 
     # ------------------------------------------------------------ config tab
     def _add_key_row(
@@ -1970,6 +2088,8 @@ class MainWindow(QMainWindow):
         if is_secret:
             edit.setEchoMode(QLineEdit.EchoMode.Password)
             row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(6)
             row.addWidget(edit, 1)
             show = QCheckBox(tr("Show"))
             show.stateChanged.connect(
@@ -1984,45 +2104,82 @@ class MainWindow(QMainWindow):
         else:
             form.addRow(f"{tr(label)}:", edit)
 
-    def _build_config_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-        # Provider + model
-        prov_box = QGroupBox(tr("Provider & Model"))
-        prov_form = QFormLayout(prov_box)
-        self.provider_combo = QComboBox()
-        populate_provider_combo(self.provider_combo)
-        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+    def _on_config_category_changed(self, idx: int) -> None:
+        self._config_stack.setCurrentIndex(idx)
+        self._config_stack.updateGeometry()
+        if hasattr(self, "_config_scroll"):
+            self._config_scroll.verticalScrollBar().setValue(0)
 
-        model_row = QHBoxLayout()
-        self.model_combo = QComboBox()
-        self.model_combo.setEditable(True)
-        self.model_combo.setMinimumWidth(320)
-        self.refresh_models_btn = QPushButton(tr("Refresh"))
-        self.refresh_models_btn.clicked.connect(self._refresh_models)
-        model_row.addWidget(self.model_combo, 1)
-        model_row.addWidget(self.refresh_models_btn)
-        model_row_w = QWidget()
-        model_row_w.setLayout(model_row)
+    def _set_config_category(self, idx: int) -> None:
+        btn = self._config_cat_group.button(idx)
+        if btn is not None:
+            btn.setChecked(True)
+            self._on_config_category_changed(idx)
 
-        prov_form.addRow(tr("Provider:"), self.provider_combo)
-        prov_form.addRow(tr("Model:"), model_row_w)
-        self.provider_hint = QLabel("")
-        self.provider_hint.setStyleSheet("color: #b58900;")
-        prov_form.addRow("", self.provider_hint)
-        # Keep prov_box alive (holds combo widgets used by prefs/env/fallback)
-        # but do NOT add it to the visible layout — it lives in the popup instead.
-        self._prov_box = prov_box
+    def _open_sync_settings(self) -> None:
+        self.tabs.setCurrentIndex(0)
+        self._set_config_category(3)
 
-        # Retry / fallback chain (the source of truth for retries & fallback).
+    def _build_page_models_chain(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(6, 2, 6, 2)
+        layout.setSpacing(2)
         layout.addWidget(self._build_chain_box())
+        layout.addStretch(1)
+        return page
 
-        # Per-provider concurrency / chunk-size limits.
-        layout.addWidget(self._build_limits_box())
+    def _build_page_credentials(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(8, 4, 8, 4)
+        page_layout.setSpacing(4)
 
-        # OpenAI-compatible endpoint (URL + key + optional org/project/headers)
+        cols = QHBoxLayout()
+        cols.setContentsMargins(0, 0, 0, 0)
+        cols.setSpacing(8)
+
+        left_v = QVBoxLayout()
+        left_v.setContentsMargins(0, 0, 0, 0)
+        left_v.setSpacing(6)
+
+        # Cloud provider API keys
+        keys_box = QGroupBox(tr("Cloud Provider API Keys"))
+        keys_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        keys_form = QFormLayout(keys_box)
+        keys_form.setContentsMargins(8, 4, 8, 4)
+        keys_form.setVerticalSpacing(4)
+        keys_form.setHorizontalSpacing(8)
+        for env_var, _attr, label, is_secret in CLOUD_KEY_FIELDS:
+            self._add_key_row(keys_form, env_var, label, is_secret)
+        left_v.addWidget(keys_box)
+
+        # GitHub Copilot
+        copilot_box = QGroupBox(tr("GitHub Copilot"))
+        copilot_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        copilot_layout = QHBoxLayout(copilot_box)
+        copilot_layout.setContentsMargins(8, 4, 8, 4)
+        self.copilot_status_label = QLabel("")
+        self.copilot_status_label.setWordWrap(True)
+        self.copilot_login_btn = QPushButton(tr("Login with GitHub"))
+        self.copilot_login_btn.setProperty("role", "tonal")
+        self.copilot_login_btn.clicked.connect(self._login_copilot)
+        copilot_layout.addWidget(self.copilot_status_label, 1)
+        copilot_layout.addWidget(self.copilot_login_btn)
+        left_v.addWidget(copilot_box)
+        left_v.addStretch(1)
+
+        right_v = QVBoxLayout()
+        right_v.setContentsMargins(0, 0, 0, 0)
+        right_v.setSpacing(6)
+
+        # OpenAI-compatible endpoint
         oai_box = QGroupBox(tr("OpenAI-compatible Endpoint"))
+        oai_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         oai_form = QFormLayout(oai_box)
+        oai_form.setContentsMargins(8, 4, 8, 4)
+        oai_form.setVerticalSpacing(4)
+        oai_form.setHorizontalSpacing(8)
         for env_var, _attr, label, is_secret in OPENAI_FIELDS:
             self._add_key_row(oai_form, env_var, label, is_secret)
         self._headers_edit = QPlainTextEdit()
@@ -2030,281 +2187,49 @@ class MainWindow(QMainWindow):
             tr("One per line: Header-Name: value   (or a JSON object)")
         )
         self._headers_edit.setPlainText(os.environ.get("XRAY_API_HEADERS", ""))
-        self._headers_edit.setFixedHeight(70)
+        self._headers_edit.setFixedHeight(60)
         oai_form.addRow(f"{tr('Custom Headers')}:", self._headers_edit)
-        layout.addWidget(oai_box)
+        right_v.addWidget(oai_box)
+        right_v.addStretch(1)
 
-        # Cloud provider API keys (base URLs are fixed by the provider)
-        keys_box = QGroupBox(tr("Cloud Provider API Keys"))
-        keys_form = QFormLayout(keys_box)
-        for env_var, _attr, label, is_secret in CLOUD_KEY_FIELDS:
-            self._add_key_row(keys_form, env_var, label, is_secret)
-        layout.addWidget(keys_box)
+        cols.addLayout(left_v, 1)
+        cols.addLayout(right_v, 1)
+        page_layout.addLayout(cols)
+        page_layout.addStretch(1)
+        return page
 
-        # Google Gemini-specific features (Batch API)
-        layout.addWidget(self._build_gemini_box())
-
-        copilot_box = QGroupBox(tr("GitHub Copilot"))
-        copilot_layout = QHBoxLayout(copilot_box)
-        self.copilot_status_label = QLabel("")
-        self.copilot_status_label.setWordWrap(True)
-        self.copilot_login_btn = QPushButton(tr("Login with GitHub"))
-        self.copilot_login_btn.clicked.connect(self._login_copilot)
-        copilot_layout.addWidget(self.copilot_status_label, 1)
-        copilot_layout.addWidget(self.copilot_login_btn)
-        layout.addWidget(copilot_box)
-
-        # Calibre library + advanced
-        misc_box = QGroupBox(tr("Library & Advanced"))
-        misc_form = QFormLayout(misc_box)
-        lib_row = QHBoxLayout()
-        self.calibre_edit = QLineEdit(os.environ.get("CALIBRE_LIBRARY", ""))
-        scan_btn = QPushButton(tr("Scan"))
-        scan_btn.setToolTip(tr("Auto-detect Calibre library locations"))
-        scan_btn.clicked.connect(self._auto_detect_calibre)
-        browse = QPushButton(tr("Browse…"))
-        browse.clicked.connect(self._browse_calibre)
-        lib_row.addWidget(self.calibre_edit, 1)
-        lib_row.addWidget(scan_btn)
-        lib_row.addWidget(browse)
-        lib_row_w = QWidget()
-        lib_row_w.setLayout(lib_row)
-        misc_form.addRow(tr("Calibre Library:"), lib_row_w)
-
-        xray_out_row = QHBoxLayout()
-        self.xray_output_edit = QLineEdit(os.environ.get("XRAY_OUTPUT_DIR", ""))
-        self.xray_output_edit.setPlaceholderText(
-            tr("Default: <app folder>/xray")
-        )
-        xray_browse = QPushButton(tr("Browse…"))
-        xray_browse.clicked.connect(self._browse_xray_output)
-        xray_out_row.addWidget(self.xray_output_edit, 1)
-        xray_out_row.addWidget(xray_browse)
-        xray_out_row_w = QWidget()
-        xray_out_row_w.setLayout(xray_out_row)
-        misc_form.addRow(tr("X-Ray Output Folder:"), xray_out_row_w)
-
-        self.temp_spin = QDoubleSpinBox()
-        self.temp_spin.setRange(0.0, 2.0)
-        self.temp_spin.setSingleStep(0.1)
-        self.temp_spin.setValue(float(getattr(generator, "TEMPERATURE", 0.4)))
-        misc_form.addRow(tr("Temperature:"), self.temp_spin)
-
-        self.lang_combo = QComboBox()
-        for code, name in AVAILABLE_LANGUAGES:
-            self.lang_combo.addItem(name, code)
-        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        misc_form.addRow(tr("Language:"), self.lang_combo)
-        layout.addWidget(misc_box)
+    def _build_page_performance(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(4)
+        layout.addWidget(self._build_limits_box())
         layout.addStretch(1)
+        return page
 
-        # Wrap the settings stack in a scroll area so the tab stays usable on
-        # short displays (the settings stack is taller than some screens).
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setWidget(w)
+    def _build_page_sync_settings(self) -> QWidget:
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(8, 6, 8, 6)
+        page_layout.setSpacing(6)
 
-        # Action bar: pinned below the scroll area so Apply / Load / Save are
-        # always visible no matter how far the settings are scrolled.
-        action_bar = QWidget()
-        action_bar.setObjectName("configActionBar")
-        action_bar.setStyleSheet(
-            "#configActionBar { background: palette(window); "
-            "border-top: 1px solid palette(mid); }"
-        )
-        btn_row = QHBoxLayout(action_bar)
-        btn_row.setContentsMargins(8, 8, 8, 8)
-        apply_btn = QPushButton(tr("Apply Settings"))
-        apply_btn.setDefault(True)
-        apply_btn.setStyleSheet("font-weight: bold; padding: 6px 18px;")
-        apply_btn.clicked.connect(self._apply_config)
-        load_env_btn = QPushButton(tr("Load .env"))
-        load_env_btn.clicked.connect(self._load_env)
-        save_env_btn = QPushButton(tr("Save .env"))
-        save_env_btn.clicked.connect(self._save_env)
-        btn_row.addStretch(1)
-        btn_row.addWidget(load_env_btn)
-        btn_row.addWidget(save_env_btn)
-        btn_row.addWidget(apply_btn)
+        cols = QHBoxLayout()
+        cols.setContentsMargins(0, 0, 0, 0)
+        cols.setSpacing(8)
 
-        # Container = scrollable settings on top, fixed action bar on the bottom.
-        container = QWidget()
-        outer = QVBoxLayout(container)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(action_bar)
-        return container
+        left_v = QVBoxLayout()
+        left_v.setContentsMargins(0, 0, 0, 0)
+        left_v.setSpacing(6)
 
-    # ------------------------------------------------------------- books tab
-    def _build_books_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        top = QHBoxLayout()
-        self.scan_btn = QPushButton(tr("Scan Library"))
-        self.scan_btn.clicked.connect(self._scan_library)
-        add_btn = QPushButton(tr("Add EPUB…"))
-        add_btn.clicked.connect(self._add_epub)
-        cleanup_btn = QPushButton(tr("Cleanup Ghost Folders"))
-        cleanup_btn.clicked.connect(self._cleanup_ghosts)
-        fix_toc_btn = QPushButton(tr("Fix EPUB TOC"))
-        fix_toc_btn.clicked.connect(self._fix_epub_toc)
-        refresh_all_btn = QPushButton(tr("Refresh All"))
-        refresh_all_btn.clicked.connect(self._populate_table)
-        self.webdav_refresh_btn = QPushButton(tr("Refresh Selected"))
-        self.webdav_refresh_btn.clicked.connect(self._refresh_selected_webdav_status)
-        self.webdav_auto_refresh_chk = QCheckBox(tr("Auto-refresh WebDAV status"))
-        self.webdav_auto_refresh_chk.setChecked(False)
-        self.webdav_auto_refresh_chk.toggled.connect(
-            self._on_webdav_auto_refresh_toggled
-        )
-        self.filter_edit = QLineEdit()
-        self.filter_edit.setPlaceholderText(tr("Filter by title or author…"))
-        self.filter_edit.textChanged.connect(self._apply_filter)
-        top.addWidget(self.scan_btn)
-        top.addWidget(add_btn)
-        top.addWidget(cleanup_btn)
-        top.addWidget(fix_toc_btn)
-        top.addWidget(refresh_all_btn)
-        top.addWidget(self.webdav_refresh_btn)
-        top.addWidget(self.webdav_auto_refresh_chk)
-        top.addWidget(self.filter_edit, 1)
-        layout.addLayout(top)
-
-        self.book_table = QTableWidget(0, 5)
-        self.book_table.setHorizontalHeaderLabels(
-            [tr("Title"), tr("Author"), tr("Added"), tr("Status"), tr("WebDAV")]
-        )
-        self.book_table.setSelectionBehavior(
-            QAbstractItemView.SelectionBehavior.SelectRows
-        )
-        self.book_table.setSelectionMode(
-            QAbstractItemView.SelectionMode.ExtendedSelection
-        )
-        self.book_table.setEditTriggers(
-            QAbstractItemView.EditTrigger.NoEditTriggers
-        )
-        self.book_table.itemSelectionChanged.connect(self._update_push_button_label)
-        header = self.book_table.horizontalHeader()
-        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        layout.addWidget(self.book_table, 1)
-
-        bottom = QHBoxLayout()
-        select_all = QPushButton(tr("Select All"))
-        select_all.clicked.connect(self.book_table.selectAll)
-        self.book_count_label = QLabel(tr("{n} books").format(n=0))
-        self.open_folder_btn = QPushButton(tr("Open Local Folder"))
-        self.open_folder_btn.clicked.connect(self._open_local_folder)
-        self.delete_xray_btn = QPushButton(tr("Delete Local X-Ray"))
-        self.delete_xray_btn.clicked.connect(self._delete_local_xray)
-        self.webdav_upload_btn = QPushButton(tr("Upload Selected to WebDAV"))
-        self.webdav_upload_btn.clicked.connect(self._webdav_upload_selected)
-        self.webdav_download_btn = QPushButton(tr("Download Selected from WebDAV"))
-        self.webdav_download_btn.clicked.connect(self._webdav_download_selected)
-        self.webdav_delete_btn = QPushButton(tr("Delete Selected from WebDAV"))
-        self.webdav_delete_btn.clicked.connect(self._webdav_delete_selected)
-        self.start_btn = QPushButton(tr("Generate X-Ray"))
-        self.start_btn.clicked.connect(self._start_analysis)
-        self._chain_info_label = _ChainInfoLabel(lambda: self._chain_tooltip_text())
-        bottom.addWidget(select_all)
-        bottom.addWidget(self.book_count_label)
-        bottom.addWidget(self.open_folder_btn)
-        bottom.addWidget(self.delete_xray_btn)
-        bottom.addStretch(1)
-        bottom.addWidget(self.webdav_upload_btn)
-        bottom.addWidget(self.webdav_download_btn)
-        bottom.addWidget(self.webdav_delete_btn)
-        _start_w = QWidget()
-        _start_l = QHBoxLayout(_start_w)
-        _start_l.setContentsMargins(0, 0, 0, 0)
-        _start_l.setSpacing(4)
-        _start_l.addWidget(self.start_btn)
-        _start_l.addWidget(self._chain_info_label)
-        bottom.addWidget(_start_w)
-        layout.addLayout(bottom)
-        return w
-
-    # ---------------------------------------------------------- progress tab
-    def _build_progress_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
-        overall_box = QGroupBox(tr("Overall Progress"))
-        ov = QFormLayout(overall_box)
-        self.overall_bar = QProgressBar()
-        self.overall_label = QLabel(tr("Idle"))
-        ov.addRow(tr("Batch:"), self.overall_bar)
-        ov.addRow("", self.overall_label)
-        # Stop button lives with the live progress it controls.
-        stop_row = QHBoxLayout()
-        stop_row.addStretch(1)
-        self.stop_btn = QPushButton(tr("Stop"))
-        self.stop_btn.setEnabled(False)
-        self.stop_btn.clicked.connect(self._stop_analysis)
-        stop_row.addWidget(self.stop_btn)
-        ov.addRow("", stop_row)
-        layout.addWidget(overall_box)
-
-        book_box = QGroupBox(tr("Current Book"))
-        bk = QFormLayout(book_box)
-        self.book_bar = QProgressBar()
-        self.current_book_label = QLabel("—")
-        self.chunk_label = QLabel("—")
-        self.op_label = QLabel("—")
-        bk.addRow(tr("Book:"), self.current_book_label)
-        bk.addRow(tr("Progress:"), self.book_bar)
-        bk.addRow(tr("Chunk:"), self.chunk_label)
-        bk.addRow(tr("Operation:"), self.op_label)
-        layout.addWidget(book_box)
-
-        stats_box = QGroupBox(tr("Stats"))
-        st = QHBoxLayout(stats_box)
-        self.stat_chars = QLabel(tr("Characters: {n}").format(n=0))
-        self.stat_locs = QLabel(tr("Locations: {n}").format(n=0))
-        self.stat_events = QLabel(tr("Events: {n}").format(n=0))
-        for lbl in (self.stat_chars, self.stat_locs, self.stat_events):
-            st.addWidget(lbl)
-        st.addStretch(1)
-        layout.addWidget(stats_box)
-
-        log_box = QGroupBox(tr("Log"))
-        lg = QVBoxLayout(log_box)
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(5000)
-        self.log_view.setFont(QFont("Consolas", 9))
-        lg.addWidget(self.log_view, 1)
-        log_btns = QHBoxLayout()
-        clear_btn = QPushButton(tr("Clear"))
-        clear_btn.clicked.connect(self.log_view.clear)
-        save_btn = QPushButton(tr("Save Log…"))
-        save_btn.clicked.connect(self._save_log)
-        self.autoscroll_chk = QCheckBox(tr("Auto-scroll"))
-        self.autoscroll_chk.setChecked(True)
-        log_btns.addWidget(clear_btn)
-        log_btns.addWidget(save_btn)
-        log_btns.addWidget(self.autoscroll_chk)
-        log_btns.addStretch(1)
-        lg.addLayout(log_btns)
-        layout.addWidget(log_box, 1)
-        return w
-
-    # -------------------------------------------------------------- sync tab
-    def _build_sync_tab(self) -> QWidget:
-        w = QWidget()
-        layout = QVBoxLayout(w)
-
+        # KOReader Device
         box = QGroupBox(tr("KOReader Device"))
         form = QFormLayout(box)
+        form.setContentsMargins(8, 6, 8, 6)
+        form.setSpacing(4)
         self.device_edit = QLineEdit()
         self.device_edit.setPlaceholderText("192.168.1.42  or  192.168.1.42:8763")
         test_btn = QPushButton(tr("Test Connection"))
+        test_btn.setProperty("role", "tonal")
         test_btn.clicked.connect(self._test_device)
         row = QHBoxLayout()
         row.addWidget(self.device_edit, 1)
@@ -2316,22 +2241,26 @@ class MainWindow(QMainWindow):
         self.autopush_chk = QCheckBox(tr("Push results automatically after each book"))
         form.addRow("", self.autopush_chk)
 
-        self.push_now_btn = QPushButton(tr("Push Selected Book Now"))
-        self.push_now_btn.clicked.connect(self._push_selected)
-        form.addRow("", self.push_now_btn)
-
-        self.device_status = QLabel(
+        self.device_config_status = QLabel(
             tr("On KOReader: X-Ray menu → Cloud Sync → Receive from PC")
         )
-        self.device_status.setWordWrap(True)
-        form.addRow(tr("Status:"), self.device_status)
-        layout.addWidget(box)
+        self.device_config_status.setWordWrap(True)
+        form.addRow(tr("Status:"), self.device_config_status)
+        left_v.addWidget(box)
+        left_v.addStretch(1)
 
-        # ------------------------------------------------------------ WebDAV
+        right_v = QVBoxLayout()
+        right_v.setContentsMargins(0, 0, 0, 0)
+        right_v.setSpacing(6)
+
+        # WebDAV Cloud Sync
         wd_box = QGroupBox(tr("WebDAV Cloud Sync"))
         wd = QVBoxLayout(wd_box)
+        wd.setContentsMargins(8, 6, 8, 6)
+        wd.setSpacing(4)
 
         wd_form = QFormLayout()
+        wd_form.setSpacing(4)
         self.webdav_url_edit = QLineEdit()
         self.webdav_url_edit.setPlaceholderText(
             "https://dav.example.com/remote.php/dav/files/USER/koreader/xray"
@@ -2373,14 +2302,16 @@ class MainWindow(QMainWindow):
             )
         )
         hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666;")
+        hint.setProperty("class", "hint")
         wd.addWidget(hint)
 
         wd_btns = QHBoxLayout()
         wd_test_btn = QPushButton(tr("Test Connection"))
+        wd_test_btn.setProperty("role", "tonal")
         wd_test_btn.clicked.connect(self._test_webdav)
         wd_btns.addWidget(wd_test_btn)
         self.webdav_browse_btn = QPushButton(tr("Choose Path"))
+        self.webdav_browse_btn.setProperty("role", "outlined")
         self.webdav_browse_btn.clicked.connect(self._browse_webdav_folder)
         wd_btns.addWidget(self.webdav_browse_btn)
         wd_btns.addStretch(1)
@@ -2390,10 +2321,580 @@ class MainWindow(QMainWindow):
             tr("Upload to WebDAV automatically after each book")
         )
         wd.addWidget(self.webdav_autopush_chk)
-        layout.addWidget(wd_box)
+
+        self.webdav_auto_refresh_chk = QCheckBox(
+            tr("Auto-refresh WebDAV status")
+        )
+        self.webdav_auto_refresh_chk.setChecked(False)
+        self.webdav_auto_refresh_chk.toggled.connect(
+            self._on_webdav_auto_refresh_toggled
+        )
+        wd.addWidget(self.webdav_auto_refresh_chk)
+        right_v.addWidget(wd_box)
+        right_v.addStretch(1)
+
+        cols.addLayout(left_v, 1)
+        cols.addLayout(right_v, 1)
+        page_layout.addLayout(cols)
+        page_layout.addSpacing(8)
+        page_layout.addStretch(1)
+        return page
+
+    def _build_page_general(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
+
+        # Calibre library
+        calibre_box = QGroupBox(tr("Calibre Library"))
+        calibre_form = QFormLayout(calibre_box)
+        lib_row = QHBoxLayout()
+        self.calibre_edit = QLineEdit(os.environ.get("CALIBRE_LIBRARY", ""))
+        scan_btn = QPushButton(tr("Scan"))
+        scan_btn.setProperty("role", "tonal")
+        scan_btn.setToolTip(tr("Auto-detect Calibre library locations"))
+        scan_btn.clicked.connect(self._auto_detect_calibre)
+        browse = QPushButton(tr("Browse…"))
+        browse.setProperty("role", "outlined")
+        browse.clicked.connect(self._browse_calibre)
+        lib_row.addWidget(self.calibre_edit, 1)
+        lib_row.addWidget(scan_btn)
+        lib_row.addWidget(browse)
+        lib_row_w = QWidget()
+        lib_row_w.setLayout(lib_row)
+        calibre_form.addRow(tr("Calibre Library:"), lib_row_w)
+        layout.addWidget(calibre_box)
+
+        # Storage & options
+        misc_box = QGroupBox(tr("General & Storage"))
+        misc_form = QFormLayout(misc_box)
+
+        xray_out_row = QHBoxLayout()
+        self.xray_output_edit = QLineEdit(os.environ.get("XRAY_OUTPUT_DIR", ""))
+        self.xray_output_edit.setPlaceholderText(
+            tr("Default: <app folder>/xray")
+        )
+        xray_browse = QPushButton(tr("Browse…"))
+        xray_browse.setProperty("role", "outlined")
+        xray_browse.clicked.connect(self._browse_xray_output)
+        xray_out_row.addWidget(self.xray_output_edit, 1)
+        xray_out_row.addWidget(xray_browse)
+        xray_out_row_w = QWidget()
+        xray_out_row_w.setLayout(xray_out_row)
+        misc_form.addRow(tr("X-Ray Output Folder:"), xray_out_row_w)
+
+        self.temp_spin = QDoubleSpinBox()
+        self.temp_spin.setRange(0.0, 2.0)
+        self.temp_spin.setSingleStep(0.1)
+        self.temp_spin.setValue(float(getattr(generator, "TEMPERATURE", 0.4)))
+        self.temp_spin.setMaximumWidth(120)
+        misc_form.addRow(tr("Temperature:"), self.temp_spin)
+
+        self.lang_combo = QComboBox()
+        self.lang_combo.setMaximumWidth(220)
+        for code, name in AVAILABLE_LANGUAGES:
+            self.lang_combo.addItem(name, code)
+        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
+        misc_form.addRow(tr("Language:"), self.lang_combo)
+        layout.addWidget(misc_box)
 
         layout.addStretch(1)
+        return page
+
+    def _build_config_tab(self) -> QWidget:
+        # Provider + model combos (kept alive for prefs/env/fallback compatibility)
+        prov_box = QGroupBox(tr("Provider & Model"))
+        prov_form = QFormLayout(prov_box)
+        self.provider_combo = QComboBox()
+        populate_provider_combo(self.provider_combo)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+
+        model_row = QHBoxLayout()
+        self.model_combo = QComboBox()
+        self.model_combo.setEditable(True)
+        self.model_combo.setMinimumWidth(320)
+        self.refresh_models_btn = QPushButton(tr("Refresh"))
+        self.refresh_models_btn.setProperty("role", "tonal")
+        self.refresh_models_btn.clicked.connect(self._refresh_models)
+        model_row.addWidget(self.model_combo, 1)
+        model_row.addWidget(self.refresh_models_btn)
+        model_row_w = QWidget()
+        model_row_w.setLayout(model_row)
+
+        prov_form.addRow(tr("Provider:"), self.provider_combo)
+        prov_form.addRow(tr("Model:"), model_row_w)
+        self.provider_hint = QLabel("")
+        self.provider_hint.setStyleSheet("color: #b58900;")
+        prov_form.addRow("", self.provider_hint)
+        self._prov_box = prov_box
+
+        # Category Bar
+        cat_bar = QWidget()
+        cat_bar.setObjectName("configCategoryBar")
+        cat_layout = QHBoxLayout(cat_bar)
+        cat_layout.setContentsMargins(10, 4, 10, 4)
+        cat_layout.setSpacing(6)
+
+        self._config_cat_group = QButtonGroup(self)
+        self._config_cat_group.setExclusive(True)
+
+        categories = [
+            tr("AI Models & Chain"),
+            tr("API Credentials"),
+            tr("Performance & Limits"),
+            tr("Cloud & Device Sync"),
+            tr("General & Storage"),
+        ]
+
+        for i, title in enumerate(categories):
+            btn = QPushButton(title)
+            btn.setProperty("role", "category-pill")
+            btn.setCheckable(True)
+            if i == 0:
+                btn.setChecked(True)
+            self._config_cat_group.addButton(btn, i)
+            cat_layout.addWidget(btn)
+
+        cat_layout.addStretch(1)
+        self._config_cat_group.idClicked.connect(self._on_config_category_changed)
+
+        # Stack of category pages
+        self._config_stack = _AdaptiveStackedWidget()
+        self._config_stack.addWidget(self._build_page_models_chain())
+        self._config_stack.addWidget(self._build_page_credentials())
+        self._config_stack.addWidget(self._build_page_performance())
+        self._config_stack.addWidget(self._build_page_sync_settings())
+        self._config_stack.addWidget(self._build_page_general())
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self._config_stack)
+        self._config_scroll = scroll
+
+        # Action bar pinned at bottom
+        action_bar = QWidget()
+        action_bar.setObjectName("configActionBar")
+        btn_row = QHBoxLayout(action_bar)
+        btn_row.setContentsMargins(10, 6, 10, 6)
+        btn_row.setSpacing(8)
+        apply_btn = QPushButton(tr("Apply Settings"))
+        apply_btn.setObjectName("apply_btn")
+        apply_btn.setDefault(True)
+        apply_btn.setProperty("role", "filled")
+        apply_btn.clicked.connect(self._apply_config)
+        load_env_btn = QPushButton(tr("Load .env"))
+        load_env_btn.setProperty("role", "outlined")
+        load_env_btn.clicked.connect(self._load_env)
+        save_env_btn = QPushButton(tr("Save .env"))
+        save_env_btn.setProperty("role", "tonal")
+        save_env_btn.clicked.connect(self._save_env)
+        btn_row.addStretch(1)
+        btn_row.addWidget(load_env_btn)
+        btn_row.addWidget(save_env_btn)
+        btn_row.addWidget(apply_btn)
+
+        container = QWidget()
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        outer.addWidget(cat_bar)
+        outer.addWidget(scroll, 1)
+        outer.addWidget(action_bar)
+        return container
+
+    # ------------------------------------------------------------- books tab
+    def _build_books_tab(self) -> QWidget:
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        # Single Streamlined Top Toolbar
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(8)
+
+        self.scan_btn = QPushButton(tr("Scan Library"))
+        self.scan_btn.setObjectName("scan_btn")
+        self.scan_btn.setProperty("role", "filled")
+        self.scan_btn.clicked.connect(self._scan_library)
+
+        add_btn = QPushButton(tr("Add EPUB…"))
+        add_btn.setProperty("role", "tonal")
+        add_btn.clicked.connect(self._add_epub)
+
+        self.filter_edit = QLineEdit()
+        self.filter_edit.setPlaceholderText(tr("Search books by title or author…"))
+        self.filter_edit.setClearButtonEnabled(True)
+        self.filter_edit.textChanged.connect(self._apply_filter)
+
+        refresh_all_btn = QPushButton(tr("Refresh All"))
+        refresh_all_btn.setProperty("role", "outlined")
+        refresh_all_btn.clicked.connect(self._populate_table)
+
+        # More Actions dropdown menu
+        more_btn = QPushButton(tr("More Actions"))
+        more_btn.setProperty("role", "outlined")
+        more_menu = QMenu(more_btn)
+        act_fix_toc = more_menu.addAction(tr("Fix EPUB TOC"))
+        act_fix_toc.triggered.connect(self._fix_epub_toc)
+        act_cleanup = more_menu.addAction(tr("Cleanup Ghost Folders"))
+        act_cleanup.triggered.connect(self._cleanup_ghosts)
+        more_menu.addSeparator()
+        self._act_auto_refresh = more_menu.addAction(tr("Auto-refresh WebDAV status"))
+        self._act_auto_refresh.setCheckable(True)
+        if hasattr(self, "webdav_auto_refresh_chk"):
+            self._act_auto_refresh.setChecked(self.webdav_auto_refresh_chk.isChecked())
+            self._act_auto_refresh.toggled.connect(self.webdav_auto_refresh_chk.setChecked)
+            self.webdav_auto_refresh_chk.toggled.connect(self._act_auto_refresh.setChecked)
+        more_menu.addSeparator()
+        act_sync_center = more_menu.addAction(tr("Sync Center"))
+        act_sync_center.triggered.connect(lambda: self.tabs.setCurrentIndex(3))
+        more_btn.setMenu(more_menu)
+
+        top_bar.addWidget(self.scan_btn)
+        top_bar.addWidget(add_btn)
+        top_bar.addWidget(self.filter_edit, 1)
+        top_bar.addWidget(refresh_all_btn)
+        top_bar.addWidget(more_btn)
+        layout.addLayout(top_bar)
+
+        self.book_table = QTableWidget(0, 5)
+        self.book_table.setHorizontalHeaderLabels(
+            [tr("Title"), tr("Author"), tr("Added"), tr("Status"), tr("WebDAV")]
+        )
+        self.book_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.book_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection
+        )
+        self.book_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.book_table.verticalHeader().setDefaultSectionSize(48)
+        self.book_table.verticalHeader().setVisible(False)
+        self.book_table.setShowGrid(False)
+        self.book_table.setAlternatingRowColors(True)
+        self.book_table.itemSelectionChanged.connect(self._update_push_button_label)
+        self.book_table.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        header = self.book_table.horizontalHeader()
+        header.setMinimumSectionSize(60)
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(1, 115)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(2, 105)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(3, 125)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        header.resizeSection(4, 80)
+        layout.addWidget(self.book_table, 1)
+
+        # Single Streamlined Bottom Action Bar
+        bottom_bar = QHBoxLayout()
+        bottom_bar.setSpacing(8)
+
+        select_all = QPushButton(tr("Select All"))
+        select_all.setProperty("role", "outlined")
+        select_all.clicked.connect(self.book_table.selectAll)
+
+        self.book_count_label = QLabel(tr("{n} books").format(n=0))
+        self.book_count_label.setProperty("class", "bold")
+
+        self.open_folder_btn = QPushButton(tr("Open Local Folder"))
+        self.open_folder_btn.setProperty("role", "outlined")
+        self.open_folder_btn.clicked.connect(self._open_local_folder)
+
+        # WebDAV Cloud Actions menu button
+        webdav_menu_btn = QPushButton(tr("WebDAV Cloud Actions"))
+        webdav_menu_btn.setProperty("role", "tonal")
+        wd_menu = QMenu(webdav_menu_btn)
+        act_up = wd_menu.addAction(tr("Upload Selected to WebDAV"))
+        act_up.triggered.connect(self._webdav_upload_selected)
+        act_down = wd_menu.addAction(tr("Download Selected from WebDAV"))
+        act_down.triggered.connect(self._webdav_download_selected)
+        act_del = wd_menu.addAction(tr("Delete Selected from WebDAV"))
+        act_del.triggered.connect(self._webdav_delete_selected)
+        wd_menu.addSeparator()
+        act_ref = wd_menu.addAction(tr("Refresh Selected"))
+        act_ref.triggered.connect(self._refresh_selected_webdav_status)
+        wd_menu.addSeparator()
+        act_transfer = wd_menu.addAction(tr("Sync Center"))
+        act_transfer.triggered.connect(lambda: self.tabs.setCurrentIndex(3))
+        webdav_menu_btn.setMenu(wd_menu)
+
+        self.delete_xray_btn = QPushButton(tr("Delete Local X-Ray"))
+        self.delete_xray_btn.setObjectName("delete_xray_btn")
+        self.delete_xray_btn.setProperty("role", "danger")
+        self.delete_xray_btn.clicked.connect(self._delete_local_xray)
+
+        bottom_bar.addWidget(select_all)
+        bottom_bar.addWidget(self.book_count_label)
+        bottom_bar.addWidget(self.open_folder_btn)
+        bottom_bar.addWidget(webdav_menu_btn)
+        bottom_bar.addWidget(self.delete_xray_btn)
+        bottom_bar.addStretch(1)
+
+        self.start_btn = QPushButton(tr("Generate X-Ray"))
+        self.start_btn.setObjectName("start_btn")
+        self.start_btn.setProperty("role", "filled")
+        self.start_btn.clicked.connect(self._start_analysis)
+        self._chain_info_label = _ChainInfoLabel(lambda: self._chain_tooltip_text())
+        _start_w = QWidget()
+        _start_l = QHBoxLayout(_start_w)
+        _start_l.setContentsMargins(0, 0, 0, 0)
+        _start_l.setSpacing(4)
+        _start_l.addWidget(self.start_btn)
+        _start_l.addWidget(self._chain_info_label)
+        bottom_bar.addWidget(_start_w)
+
+        layout.addLayout(bottom_bar)
         return w
+
+
+    # ---------------------------------------------------------- progress tab
+    def _build_progress_tab(self) -> QWidget:
+        container = QWidget()
+        scroll = QScrollArea()
+        self._progress_scroll = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        w = QWidget()
+        layout = QVBoxLayout(w)
+
+        overall_box = QGroupBox(tr("Overall Progress"))
+        ov = QFormLayout(overall_box)
+        self.overall_bar = QProgressBar()
+        self.overall_bar.setTextVisible(False)
+        self.overall_label = QLabel(tr("Idle"))
+        ov.addRow(tr("Batch:"), self.overall_bar)
+        ov.addRow("", self.overall_label)
+        # Stop button lives with the live progress it controls.
+        stop_row = QHBoxLayout()
+        stop_row.addStretch(1)
+        self.stop_btn = QPushButton(tr("Stop"))
+        self.stop_btn.setObjectName("stop_btn")
+        self.stop_btn.setProperty("role", "danger")
+        self.stop_btn.setEnabled(False)
+        self.stop_btn.clicked.connect(self._stop_analysis)
+        stop_row.addWidget(self.stop_btn)
+        ov.addRow("", stop_row)
+        layout.addWidget(overall_box)
+
+        book_box = QGroupBox(tr("Current Book"))
+        bk = QFormLayout(book_box)
+        self.book_bar = QProgressBar()
+        self.book_bar.setTextVisible(False)
+        self.current_book_label = QLabel("—")
+        self.chunk_label = QLabel("—")
+        self.op_label = QLabel("—")
+        bk.addRow(tr("Book:"), self.current_book_label)
+        bk.addRow(tr("Progress:"), self.book_bar)
+        bk.addRow(tr("Chunk:"), self.chunk_label)
+        bk.addRow(tr("Operation:"), self.op_label)
+        layout.addWidget(book_box)
+
+        stats_box = QGroupBox(tr("Stats"))
+        st = QHBoxLayout(stats_box)
+        self.stat_chars = QLabel(tr("Characters: {n}").format(n=0))
+        self.stat_locs = QLabel(tr("Locations: {n}").format(n=0))
+        self.stat_events = QLabel(tr("Events: {n}").format(n=0))
+        for lbl in (self.stat_chars, self.stat_locs, self.stat_events):
+            lbl.setProperty("class", "md3-chip")
+            st.addWidget(lbl)
+        st.addStretch(1)
+        layout.addWidget(stats_box)
+
+        log_box = QGroupBox(tr("Log"))
+        lg = QVBoxLayout(log_box)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(5000)
+        self.log_view.setFont(QFont("Consolas", 9))
+        self.log_view.setMinimumHeight(160)
+        lg.addWidget(self.log_view, 1)
+        log_btns = QHBoxLayout()
+        clear_btn = QPushButton(tr("Clear"))
+        clear_btn.setProperty("role", "outlined")
+        clear_btn.clicked.connect(self.log_view.clear)
+        save_btn = QPushButton(tr("Save Log…"))
+        save_btn.setProperty("role", "tonal")
+        save_btn.clicked.connect(self._save_log)
+        self.autoscroll_chk = QCheckBox(tr("Auto-scroll"))
+        self.autoscroll_chk.setChecked(True)
+        log_btns.addWidget(clear_btn)
+        log_btns.addWidget(save_btn)
+        log_btns.addWidget(self.autoscroll_chk)
+        log_btns.addStretch(1)
+        lg.addLayout(log_btns)
+        layout.addWidget(log_box, 1)
+
+        self._progress_scroll = scroll
+        scroll.setWidget(w)
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+        return container
+
+    def _update_transfer_center_summaries(self) -> None:
+        dev = self.device_edit.text().strip() if hasattr(self, "device_edit") else ""
+        if hasattr(self, "transfer_device_target"):
+            self.transfer_device_target.setText(dev or tr("(not set)"))
+        wd = self.webdav_url_edit.text().strip() if hasattr(self, "webdav_url_edit") else ""
+        if hasattr(self, "transfer_webdav_target"):
+            self.transfer_webdav_target.setText(wd or tr("(not set)"))
+
+    # -------------------------------------------------------------- sync tab
+    def _build_sync_tab(self) -> QWidget:
+        container = QWidget()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        layout.setContentsMargins(10, 6, 10, 6)
+        layout.setSpacing(6)
+
+        # Header / Intro Card
+        hero_box = QGroupBox(tr("Sync Center"))
+        hero_layout = QHBoxLayout(hero_box)
+        hero_layout.setContentsMargins(10, 6, 10, 6)
+        hero_info = QLabel(
+            tr(
+                "Point KOReader and this app at the same WebDAV folder so "
+                "X-Ray data syncs both ways."
+            )
+        )
+        hero_info.setWordWrap(True)
+        hero_info.setProperty("class", "hint")
+        cfg_settings_btn = QPushButton(tr("Configure Sync Settings"))
+        cfg_settings_btn.setProperty("role", "tonal")
+        cfg_settings_btn.clicked.connect(self._open_sync_settings)
+        hero_layout.addWidget(hero_info, 1)
+        hero_layout.addWidget(cfg_settings_btn)
+        layout.addWidget(hero_box)
+
+        # ------------------------------------------------------------ Device Direct Push
+        dev_box = QGroupBox(tr("Device Wi-Fi Direct Push"))
+        dev_form = QFormLayout(dev_box)
+        dev_form.setContentsMargins(10, 6, 10, 6)
+        dev_form.setSpacing(4)
+
+        self.transfer_device_target = QLabel()
+        self.transfer_device_target.setProperty("class", "bold")
+        dev_form.addRow(tr("Device IP[:port]:"), self.transfer_device_target)
+
+        self.device_status = QLabel(
+            tr("On KOReader: X-Ray menu → Cloud Sync → Receive from PC")
+        )
+        self.device_status.setWordWrap(True)
+        dev_form.addRow(tr("Status:"), self.device_status)
+
+        dev_btn_row = QHBoxLayout()
+        self.push_now_btn = QPushButton(tr("Push Selected Book to KOReader"))
+        self.push_now_btn.setObjectName("push_now_btn")
+        self.push_now_btn.setProperty("role", "filled")
+        self.push_now_btn.clicked.connect(self._push_selected)
+        dev_test_btn = QPushButton(tr("Test Connection"))
+        dev_test_btn.setProperty("role", "tonal")
+        dev_test_btn.clicked.connect(self._test_device)
+        dev_btn_row.addWidget(self.push_now_btn)
+        dev_btn_row.addWidget(dev_test_btn)
+        dev_btn_row.addStretch(1)
+        dev_btn_w = QWidget()
+        dev_btn_w.setLayout(dev_btn_row)
+        dev_form.addRow("", dev_btn_w)
+        layout.addWidget(dev_box)
+
+        # ------------------------------------------------------------ WebDAV Cloud Sync
+        wd_box = QGroupBox(tr("WebDAV Cloud Storage"))
+        wd_layout = QVBoxLayout(wd_box)
+        wd_layout.setContentsMargins(10, 6, 10, 6)
+        wd_layout.setSpacing(4)
+
+        wd_form = QFormLayout()
+        wd_form.setSpacing(4)
+        self.transfer_webdav_target = QLabel()
+        self.transfer_webdav_target.setProperty("class", "bold")
+        wd_form.addRow(tr("Server URL:"), self.transfer_webdav_target)
+
+        self.transfer_webdav_status = QLabel(tr("Not configured."))
+        self.transfer_webdav_status.setWordWrap(True)
+        wd_form.addRow(tr("Status:"), self.transfer_webdav_status)
+        wd_layout.addLayout(wd_form)
+
+        # Primary Cloud Actions
+        cloud_actions_row = QHBoxLayout()
+        cloud_actions_row.setSpacing(6)
+        self.webdav_upload_btn = QPushButton(tr("Upload Selected to WebDAV"))
+        self.webdav_upload_btn.setObjectName("webdav_upload_btn")
+        self.webdav_upload_btn.setProperty("role", "filled")
+        self.webdav_upload_btn.clicked.connect(self._webdav_upload_selected)
+
+        self.webdav_download_btn = QPushButton(tr("Download Selected from WebDAV"))
+        self.webdav_download_btn.setObjectName("webdav_download_btn")
+        self.webdav_download_btn.setProperty("role", "tonal")
+        self.webdav_download_btn.clicked.connect(self._webdav_download_selected)
+
+        self.webdav_delete_btn = QPushButton(tr("Delete Selected from WebDAV"))
+        self.webdav_delete_btn.setObjectName("webdav_delete_btn")
+        self.webdav_delete_btn.setProperty("role", "danger")
+        self.webdav_delete_btn.clicked.connect(self._webdav_delete_selected)
+
+        cloud_actions_row.addWidget(self.webdav_upload_btn)
+        cloud_actions_row.addWidget(self.webdav_download_btn)
+        cloud_actions_row.addWidget(self.webdav_delete_btn)
+        cloud_actions_row.addStretch(1)
+        wd_layout.addLayout(cloud_actions_row)
+
+        # Secondary Actions
+        cloud_sec_row = QHBoxLayout()
+        cloud_sec_row.setSpacing(6)
+        self.webdav_refresh_btn = QPushButton(tr("Refresh Selected"))
+        self.webdav_refresh_btn.setObjectName("webdav_refresh_btn")
+        self.webdav_refresh_btn.setProperty("role", "outlined")
+        self.webdav_refresh_btn.clicked.connect(self._refresh_selected_webdav_status)
+
+        wd_test_btn = QPushButton(tr("Test Connection"))
+        wd_test_btn.setProperty("role", "outlined")
+        wd_test_btn.clicked.connect(self._test_webdav)
+
+        transfer_browse_btn = QPushButton(tr("Choose Path"))
+        transfer_browse_btn.setProperty("role", "outlined")
+        transfer_browse_btn.clicked.connect(self._browse_webdav_folder)
+
+        cloud_sec_row.addWidget(self.webdav_refresh_btn)
+        cloud_sec_row.addWidget(wd_test_btn)
+        cloud_sec_row.addWidget(transfer_browse_btn)
+        cloud_sec_row.addStretch(1)
+        wd_layout.addLayout(cloud_sec_row)
+
+        layout.addWidget(wd_box)
+        layout.addSpacing(12)
+        layout.addStretch(1)
+
+        scroll.setWidget(w)
+        self._sync_scroll = scroll
+
+        outer = QVBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(scroll)
+
+        # Keep summaries in sync with fields
+        if hasattr(self, "device_edit"):
+            self.device_edit.textChanged.connect(self._update_transfer_center_summaries)
+        if hasattr(self, "webdav_url_edit"):
+            self.webdav_url_edit.textChanged.connect(self._update_transfer_center_summaries)
+        self._update_transfer_center_summaries()
+
+        return container
 
     # ----------------------------------------------------------- results tab
     def _build_results_tab(self) -> QWidget:
@@ -2402,8 +2903,10 @@ class MainWindow(QMainWindow):
 
         top = QHBoxLayout()
         load_btn = QPushButton(tr("Open xray_data.json…"))
+        load_btn.setProperty("role", "outlined")
         load_btn.clicked.connect(self._open_result_file)
         load_sel_btn = QPushButton(tr("Load Selected Book's Result"))
+        load_sel_btn.setProperty("role", "filled")
         load_sel_btn.clicked.connect(self._load_selected_result)
         top.addWidget(load_btn)
         top.addWidget(load_sel_btn)
@@ -2411,19 +2914,23 @@ class MainWindow(QMainWindow):
         layout.addLayout(top)
 
         self.result_title = QLabel(tr("No result loaded."))
-        self.result_title.setStyleSheet("font-weight: bold;")
+        self.result_title.setProperty("class", "bold")
         layout.addWidget(self.result_title)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.result_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.result_tree = QTreeWidget()
         self.result_tree.setHeaderLabels([tr("Entity"), tr("Detail")])
+        self.result_tree.header().setMinimumSectionSize(36)
+        self.result_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.result_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        self.result_tree.header().resizeSection(1, 56)
         self.result_tree.itemClicked.connect(self._on_result_item)
-        splitter.addWidget(self.result_tree)
+        self.result_splitter.addWidget(self.result_tree)
         self.result_detail = QTextEdit()
         self.result_detail.setReadOnly(True)
-        splitter.addWidget(self.result_detail)
-        splitter.setSizes([420, 620])
-        layout.addWidget(splitter, 1)
+        self.result_splitter.addWidget(self.result_detail)
+        self.result_splitter.setSizes([320, 440])
+        layout.addWidget(self.result_splitter, 1)
         return w
 
     # =========================================== retry / fallback chain editor
@@ -2432,14 +2939,15 @@ class MainWindow(QMainWindow):
         "Model",
         "Retries",
         "Cooldown (s)",
-        "Input ($/M tok)",
-        "Output ($/M tok)",
+        "Price ($/M tok)",
         "Balance API",
     )
 
     def _build_chain_box(self) -> QGroupBox:
         box = QGroupBox(tr("Retry / Fallback Chain"))
         v = QVBoxLayout(box)
+        v.setContentsMargins(8, 4, 8, 4)
+        v.setSpacing(4)
 
         hint = QLabel(
             tr(
@@ -2464,20 +2972,30 @@ class MainWindow(QMainWindow):
             QAbstractItemView.SelectionMode.SingleSelection
         )
         hh = self.chain_table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setMinimumSectionSize(40)
+        hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(0, 170)
         hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)
-        self.chain_table.setMinimumHeight(150)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(2, 65)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(3, 86)
+        hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(4, 100)
+        hh.setSectionResizeMode(5, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(5, 92)
+        self.chain_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.chain_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.chain_table.setMaximumWidth(1000)
+        self.chain_table.setFixedHeight(provider_row_height() * 3 + 34)
         v.addWidget(self.chain_table)
 
         self._start_chain_price_fetch()
 
-        # Row controls.
+        # Row controls & options.
         row_btns = QHBoxLayout()
+        row_btns.setContentsMargins(0, 0, 0, 0)
+        row_btns.setSpacing(4)
         add_btn = QPushButton(tr("Add Model"))
         add_btn.clicked.connect(self._open_add_model_dialog)
         add_blank_btn = QPushButton(tr("Add row"))
@@ -2490,37 +3008,52 @@ class MainWindow(QMainWindow):
         down_btn.clicked.connect(lambda: self._chain_move(1))
         for b in (add_btn, add_blank_btn, rm_btn, up_btn, down_btn):
             row_btns.addWidget(b)
+        row_btns.addSpacing(16)
+        self.chain_honor_retry_after = QCheckBox(
+            tr("Honor server Retry-After header on rate limits")
+        )
+        self.chain_honor_retry_after.setChecked(True)
+        row_btns.addWidget(self.chain_honor_retry_after)
         row_btns.addStretch(1)
         v.addLayout(row_btns)
 
         # Chain-level options.
-        opts_form = QFormLayout()
+        opts_v = QVBoxLayout()
+        opts_v.setContentsMargins(0, 0, 0, 0)
+        opts_v.setSpacing(2)
+
+        opt_row1 = QHBoxLayout()
+        opt_row1.setContentsMargins(0, 0, 0, 0)
+        opt_row1.addWidget(QLabel(tr("Max full-chain cycles:")))
         self.chain_max_cycles = QSpinBox()
         self.chain_max_cycles.setRange(1, 100)
         self.chain_max_cycles.setValue(retry_config.DEFAULT_MAX_CYCLES)
-        opts_form.addRow(tr("Max full-chain cycles:"), self.chain_max_cycles)
-
+        self.chain_max_cycles.setMaximumWidth(70)
+        opt_row1.addWidget(self.chain_max_cycles)
+        opt_row1.addSpacing(12)
+        opt_row1.addWidget(QLabel(tr("Wait between cycles (s):")))
         self.chain_inter_wait = QDoubleSpinBox()
         self.chain_inter_wait.setRange(0.0, 3600.0)
         self.chain_inter_wait.setSingleStep(1.0)
         self.chain_inter_wait.setValue(retry_config.DEFAULT_INTER_CYCLE_WAIT)
-        opts_form.addRow(tr("Wait between cycles (s):"), self.chain_inter_wait)
-
+        self.chain_inter_wait.setMinimumWidth(80)
+        self.chain_inter_wait.setMaximumWidth(84)
+        opt_row1.addWidget(self.chain_inter_wait)
+        opt_row1.addSpacing(12)
+        opt_row1.addWidget(QLabel(tr("When chain is exhausted:")))
         self.chain_on_exhausted = QComboBox()
+        self.chain_on_exhausted.setMaximumWidth(190)
         for key, label in (
             ("raise", tr("Raise error (skip this book)")),
             ("skip", tr("Skip request (empty result)")),
             ("exit", tr("Exit the program")),
         ):
             self.chain_on_exhausted.addItem(label, key)
-        opts_form.addRow(tr("When chain is exhausted:"), self.chain_on_exhausted)
+        opt_row1.addWidget(self.chain_on_exhausted)
+        opt_row1.addStretch(1)
+        opts_v.addLayout(opt_row1)
 
-        self.chain_honor_retry_after = QCheckBox(
-            tr("Honor server Retry-After header on rate limits")
-        )
-        self.chain_honor_retry_after.setChecked(True)
-        opts_form.addRow("", self.chain_honor_retry_after)
-        v.addLayout(opts_form)
+        v.addLayout(opts_v)
 
         return box
 
@@ -2542,7 +3075,7 @@ class MainWindow(QMainWindow):
         if idx >= 0:
             prov_combo.setCurrentIndex(idx)
         prov_combo.currentIndexChanged.connect(lambda _, row=r: self._chain_on_provider_changed(row))
-        table.setCellWidget(r, 0, prov_combo)
+        table.setCellWidget(r, 0, wrap_cell_widget(prov_combo, margins=(4, 5, 4, 5)))
 
         model_combo = QComboBox()
         model_combo.setEditable(True)
@@ -2551,70 +3084,86 @@ class MainWindow(QMainWindow):
         if model and model_combo.findText(model) < 0:
             model_combo.insertItem(0, model)
         model_combo.setCurrentText(model)
+        if model_combo.lineEdit():
+            model_combo.lineEdit().setCursorPosition(0)
+            model_combo.lineEdit().home(False)
         model_combo.currentTextChanged.connect(lambda _, row=r: self._chain_refresh_cost_row(row))
-        table.setCellWidget(r, 1, model_combo)
+        table.setCellWidget(r, 1, wrap_cell_widget(model_combo, margins=(4, 5, 4, 5)))
 
         retries_spin = QSpinBox()
+        retries_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         retries_spin.setRange(1, 50)
         retries_spin.setValue(max(1, int(retries)))
-        table.setCellWidget(r, 2, retries_spin)
+        retries_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        table.setCellWidget(
+            r,
+            2,
+            wrap_cell_widget(
+                retries_spin,
+                max_w=48,
+                align=Qt.AlignmentFlag.AlignCenter,
+                margins=(2, 5, 2, 5),
+            ),
+        )
 
         cooldown_spin = QDoubleSpinBox()
+        cooldown_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
         cooldown_spin.setRange(0.0, 3600.0)
         cooldown_spin.setSingleStep(0.5)
         cooldown_spin.setValue(max(0.0, float(cooldown)))
-        table.setCellWidget(r, 3, cooldown_spin)
+        cooldown_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        table.setCellWidget(
+            r,
+            3,
+            wrap_cell_widget(
+                cooldown_spin,
+                max_w=58,
+                align=Qt.AlignmentFlag.AlignCenter,
+                margins=(2, 5, 2, 5),
+            ),
+        )
 
-        inp_item = QTableWidgetItem("…" if not self._price_catalog else "")
-        inp_item.setFlags(inp_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        out_item = QTableWidgetItem("…" if not self._price_catalog else "")
-        out_item.setFlags(out_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        table.setItem(r, 4, inp_item)
-        table.setItem(r, 5, out_item)
+        price_item = QTableWidgetItem("…" if not self._price_catalog else "")
+        price_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        price_item.setFlags(price_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        table.setItem(r, 4, price_item)
         self._chain_set_balance_cell(r, provider)
         if self._price_catalog:
             self._chain_fill_cost_row(r, provider, model)
         self._update_gemini_batch_ui()
+        self._update_chain_table_height()
 
     def _chain_set_balance_cell(self, r: int, provider: str) -> None:
         """Render the Balance API column widget based on provider support."""
         table = self.chain_table
-        if provider == "deepseek":
-            holder = QWidget()
-            holder_layout = QHBoxLayout(holder)
-            holder_layout.setContentsMargins(0, 0, 0, 0)
-            holder_layout.setSpacing(6)
-            holder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        holder = QWidget()
+        holder_layout = QHBoxLayout(holder)
+        holder_layout.setContentsMargins(0, 0, 0, 0)
+        holder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
+        if provider == "deepseek":
             btn = QPushButton(tr("Check"))
-            btn.setToolTip(tr("Check DeepSeek user balance API."))
+            btn.setObjectName("chain_balance_btn")
+            btn.setMinimumWidth(68)
+            btn.setMaximumWidth(74)
+            btn.setToolTip(
+                tr("Check DeepSeek user balance API.") + "\n\n" + deepseek_pricing_tooltip()
+            )
             btn.clicked.connect(
                 lambda _=False, b=btn: self._check_provider_balance(
                     provider="deepseek", trigger_button=b
                 )
             )
-
-            badge = QLabel(deepseek_pricing_badge_text())
-            if deepseek_peak_pricing_active():
-                badge.setStyleSheet("color: #c62828; font-weight: bold;")
-            else:
-                badge.setStyleSheet("color: #2e7d32; font-weight: bold;")
-            badge.setToolTip(deepseek_pricing_tooltip())
-
+            holder_layout.setContentsMargins(6, 4, 6, 4)
             holder_layout.addWidget(btn)
-            holder_layout.addWidget(badge)
-            table.setCellWidget(r, 6, holder)
+            table.setCellWidget(r, 5, holder)
             return
 
-        holder = QWidget()
-        holder_layout = QHBoxLayout(holder)
-        holder_layout.setContentsMargins(0, 0, 0, 0)
-        holder_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         info = QLabel("ⓘ")
         info.setToolTip(provider_balance_tooltip(provider))
-        info.setStyleSheet("color: #607d8b; font-weight: bold;")
+        info.setStyleSheet("color: #607d8b; font-weight: bold; font-size: 13px;")
         holder_layout.addWidget(info)
-        table.setCellWidget(r, 6, holder)
+        table.setCellWidget(r, 5, holder)
 
     def _refresh_deepseek_pricing_ui(self) -> None:
         """Refresh DeepSeek pricing badge in the chain table once per minute."""
@@ -2624,7 +3173,7 @@ class MainWindow(QMainWindow):
             return
         table = self.chain_table
         for r in range(table.rowCount()):
-            prov_widget = table.cellWidget(r, 0)
+            prov_widget = unwrap_cell_widget(table.cellWidget(r, 0))
             provider = prov_widget.currentData() if prov_widget else "openai"
             if provider == "deepseek":
                 self._chain_set_balance_cell(r, provider)
@@ -2655,18 +3204,36 @@ class MainWindow(QMainWindow):
     def _chain_fill_cost_row(self, r: int, provider: str, model: str) -> None:
         price = _lookup_litellm_price(self._price_catalog, provider, model)
         table = self.chain_table
-        inp_item = table.item(r, 4)
-        out_item = table.item(r, 5)
-        if inp_item is None or out_item is None:
+        item = table.item(r, 4)
+        if item is None:
             return  # row not fully constructed yet
         if price:
             inp_per_m = price[0] * 1_000_000
             out_per_m = price[1] * 1_000_000
-            table.item(r, 4).setText(f"${inp_per_m:.4f}")  # noqa: i18n
-            table.item(r, 5).setText(f"${out_per_m:.4f}")  # noqa: i18n
+            if inp_per_m == 0 and out_per_m == 0:
+                cost_text = "$0 / $0"
+                inp_str = "$0"
+                out_str = "$0"
+            else:
+                inp_str = f"${inp_per_m:.2f}" if inp_per_m >= 0.01 else f"${inp_per_m:.3f}"
+                out_str = f"${out_per_m:.2f}" if out_per_m >= 0.01 else f"${out_per_m:.3f}"
+                cost_text = f"{inp_str}/{out_str}"
+            item.setText(cost_text)  # noqa: i18n
+            tt = tr("Input: {inp}/M, Output: {out}/M").format(inp=inp_str, out=out_str)
+            if provider == "deepseek":
+                tt += "\n\n" + deepseek_pricing_tooltip()
+            item.setToolTip(tt)
         else:
-            table.item(r, 4).setText("—")
-            table.item(r, 5).setText("—")
+            item.setText("—")
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def _update_chain_table_height(self) -> None:
+        """Dynamically size the chain table height to fit its rows without clipping or dead space."""
+        if not hasattr(self, "chain_table"):
+            return
+        rows = max(1, min(self.chain_table.rowCount(), 5))
+        header_h = self.chain_table.horizontalHeader().height() or 32
+        self.chain_table.setFixedHeight(provider_row_height() * rows + header_h + 4)
 
     def _chain_refresh_costs(self) -> None:
         """Update cost columns for every row from the cached price catalog."""
@@ -2678,9 +3245,9 @@ class MainWindow(QMainWindow):
         table = self.chain_table
         if r < 0 or r >= table.rowCount():
             return
-        prov_widget = table.cellWidget(r, 0)
+        prov_widget = unwrap_cell_widget(table.cellWidget(r, 0))
         provider = prov_widget.currentData() if prov_widget else "openai"
-        mdl_widget = table.cellWidget(r, 1)
+        mdl_widget = unwrap_cell_widget(table.cellWidget(r, 1))
         model = mdl_widget.currentText().strip() if mdl_widget else ""
         self._chain_fill_cost_row(r, provider, model)
 
@@ -2689,9 +3256,9 @@ class MainWindow(QMainWindow):
         table = self.chain_table
         if r < 0 or r >= table.rowCount():
             return
-        prov_widget = table.cellWidget(r, 0)
+        prov_widget = unwrap_cell_widget(table.cellWidget(r, 0))
         provider = prov_widget.currentData() if prov_widget else "openai"
-        mdl_widget = table.cellWidget(r, 1)
+        mdl_widget = unwrap_cell_widget(table.cellWidget(r, 1))
         if mdl_widget:
             current = mdl_widget.currentText()
             mdl_widget.blockSignals(True)
@@ -2733,6 +3300,7 @@ class MainWindow(QMainWindow):
         if r >= 0:
             self.chain_table.removeRow(r)
             self._update_gemini_batch_ui()
+            self._update_chain_table_height()
 
     def _chain_move(self, delta: int) -> None:
         table = self.chain_table
@@ -2755,13 +3323,13 @@ class MainWindow(QMainWindow):
         entries: list[RetryEntry] = []
         table = self.chain_table
         for r in range(table.rowCount()):
-            prov_widget = table.cellWidget(r, 0)
+            prov_widget = unwrap_cell_widget(table.cellWidget(r, 0))
             provider = prov_widget.currentData() if prov_widget else "openai"
-            mdl_widget = table.cellWidget(r, 1)
+            mdl_widget = unwrap_cell_widget(table.cellWidget(r, 1))
             model = mdl_widget.currentText().strip() if mdl_widget else ""
-            retries_widget = table.cellWidget(r, 2)
+            retries_widget = unwrap_cell_widget(table.cellWidget(r, 2))
             retries = retries_widget.value() if retries_widget else retry_config.DEFAULT_RETRIES
-            cooldown_widget = table.cellWidget(r, 3)
+            cooldown_widget = unwrap_cell_widget(table.cellWidget(r, 3))
             cooldown = cooldown_widget.value() if cooldown_widget else retry_config.DEFAULT_COOLDOWN
             entries.append(
                 RetryEntry(
@@ -2792,7 +3360,7 @@ class MainWindow(QMainWindow):
             return
         provider_rows: dict[str, list[int]] = {}
         for r in range(self.chain_table.rowCount()):
-            w = self.chain_table.cellWidget(r, 0)
+            w = unwrap_cell_widget(self.chain_table.cellWidget(r, 0))
             if not w:
                 continue
             p = w.currentData() or "openai"
@@ -2812,7 +3380,7 @@ class MainWindow(QMainWindow):
     def _on_chain_model_refresh_done(self, provider: str, models: list) -> None:
         rows = getattr(self, "_chain_model_rows", {}).get(provider, [])
         for r in rows:
-            mdl_w = self.chain_table.cellWidget(r, 1)
+            mdl_w = unwrap_cell_widget(self.chain_table.cellWidget(r, 1))
             if not mdl_w:
                 continue
             current = mdl_w.currentText()
@@ -2880,6 +3448,7 @@ class MainWindow(QMainWindow):
             self.chain_on_exhausted.setCurrentIndex(idx)
         self.chain_honor_retry_after.setChecked(opts.honor_retry_after)
         self._update_gemini_batch_ui()
+        self._update_chain_table_height()
 
     # ============================================================= google gemini
     def _active_provider(self) -> str:
@@ -2891,26 +3460,10 @@ class MainWindow(QMainWindow):
             return self.provider_combo.currentData() or "openai"
         return "openai"
 
-    def _build_gemini_box(self) -> QGroupBox:
-        gemini_box = QGroupBox(tr("Google Gemini"))
-        gemini_layout = QVBoxLayout(gemini_box)
-        self.gemini_batch_chk = QCheckBox(
-            tr("Use Gemini Batch API (50% cost discount)")
-        )
-        self.gemini_batch_chk.toggled.connect(self._on_gemini_batch_toggled)
-        gemini_layout.addWidget(self.gemini_batch_chk)
-
-        hint = QLabel(
-            tr(
-                "Submit chunk analysis to Google's Batch API for 50% cost savings. "
-                "Chunks are processed asynchronously (SLO up to 24h, often minutes)."
-            )
-        )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666; font-size: 11px;")
-        gemini_layout.addWidget(hint)
-        self._update_gemini_batch_ui()
-        return gemini_box
+    def _build_gemini_box(self) -> QWidget:
+        w = QWidget()
+        w.setVisible(False)
+        return w
 
     def _on_gemini_batch_toggled(self, checked: bool) -> None:
         ai_client.set_gemini_batch_enabled(checked)
@@ -2937,31 +3490,34 @@ class MainWindow(QMainWindow):
     def _build_limits_box(self) -> QGroupBox:
         box = QGroupBox(tr("Concurrency & Chunk-Size Limits"))
         v = QVBoxLayout(box)
+        v.setContentsMargins(8, 6, 8, 6)
+        v.setSpacing(4)
 
-        hint = QLabel(
-            tr(
-                "Per-provider limits. Max Workers = parallel chunk requests. "
-                "Max Chunk Size = characters sent per request. Set either to 0 "
-                "(auto) to use the built-in default (Groq auto-derives chunk "
-                "size from its token-per-minute budget)."
-            )
+        box_tip = tr(
+            "Per-provider limits. Max Workers = parallel chunk requests. "
+            "Max Chunk Size = characters sent per request. Set either to 0 "
+            "(auto) to use the built-in default (Groq auto-derives chunk "
+            "size from its token-per-minute budget)."
         )
-        hint.setWordWrap(True)
-        hint.setStyleSheet("color: #666;")
-        v.addWidget(hint)
+        box.setToolTip(box_tip)
 
         self.limits_table = QTableWidget(len(PROVIDERS), len(self._LIMIT_COLS))
         self.limits_table.setIconSize(QSize(_PROVIDER_ICON_SIZE, _PROVIDER_ICON_SIZE))
         self.limits_table.setHorizontalHeaderLabels([tr(c) for c in self._LIMIT_COLS])
+        self.limits_table.setToolTip(box_tip)
         self.limits_table.verticalHeader().setVisible(False)
-        self.limits_table.verticalHeader().setDefaultSectionSize(provider_row_height())
+        self.limits_table.verticalHeader().setDefaultSectionSize(36)
         self.limits_table.setSelectionMode(
             QAbstractItemView.SelectionMode.NoSelection
         )
         hh = self.limits_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(1, 130)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        hh.resizeSection(2, 180)
+        self.limits_table.setMaximumWidth(720)
+        self.limits_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         self._limit_worker_spins: dict[str, QSpinBox] = {}
         self._limit_chunk_spins: dict[str, QSpinBox] = {}
@@ -2972,17 +3528,30 @@ class MainWindow(QMainWindow):
             self.limits_table.setItem(row, 0, name_item)
 
             worker_spin = QSpinBox()
+            worker_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
             worker_spin.setRange(0, 64)
+            worker_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             # value 0 = "auto": show the actual default that will be used instead
             # of a generic "auto" label.
             worker_spin.setSpecialValueText(str(ai_client.auto_max_workers(key)))
             worker_spin.setValue(0)
-            self.limits_table.setCellWidget(row, 1, worker_spin)
+            self.limits_table.setCellWidget(
+                row,
+                1,
+                wrap_cell_widget(
+                    worker_spin,
+                    max_w=70,
+                    align=Qt.AlignmentFlag.AlignCenter,
+                    margins=(4, 0, 4, 0),
+                ),
+            )
             self._limit_worker_spins[key] = worker_spin
 
             chunk_spin = QSpinBox()
+            chunk_spin.setAlignment(Qt.AlignmentFlag.AlignCenter)
             chunk_spin.setRange(0, 200_000)
             chunk_spin.setSingleStep(1000)
+            chunk_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
             # value 0 = "auto": show the actual chunk size that will be used.
             # Groq derives it from the (unknown-model) TPM budget; others use the
             # global default.
@@ -2990,15 +3559,28 @@ class MainWindow(QMainWindow):
                 str(ai_client.auto_max_chunk_size(key, "__auto__" if key == "groq" else None))
             )
             chunk_spin.setValue(0)
-            self.limits_table.setCellWidget(row, 2, chunk_spin)
+            self.limits_table.setCellWidget(
+                row,
+                2,
+                wrap_cell_widget(
+                    chunk_spin,
+                    max_w=100,
+                    align=Qt.AlignmentFlag.AlignCenter,
+                    margins=(4, 0, 4, 0),
+                ),
+            )
             self._limit_chunk_spins[key] = chunk_spin
 
         vh = self.limits_table.verticalHeader().defaultSectionSize()
-        self.limits_table.setMinimumHeight(vh * (len(PROVIDERS) + 1) + 30)
+        header_h = self.limits_table.horizontalHeader().height() or 26
+        self.limits_table.setFixedHeight(vh * len(PROVIDERS) + header_h + 2)
+        self.limits_table.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         v.addWidget(self.limits_table)
 
-        # Global consolidation batch size (entities merged per merge request).
+        # Global consolidation batch size & Gemini Batch API
         consol_row = QHBoxLayout()
+        consol_row.setContentsMargins(0, 0, 0, 0)
+        consol_row.setSpacing(6)
         consol_label = QLabel(tr("Consolidation Batch Size:"))
         self.consolidation_spin = QSpinBox()
         self.consolidation_spin.setRange(0, 200)
@@ -3007,6 +3589,7 @@ class MainWindow(QMainWindow):
             str(ai_client.CONSOLIDATE_BATCH_SIZE_DEFAULT)
         )
         self.consolidation_spin.setValue(0)
+        self.consolidation_spin.setMaximumWidth(80)
         self.consolidation_spin.setToolTip(
             tr(
                 "Number of entities (characters + locations + summary) merged "
@@ -3022,6 +3605,15 @@ class MainWindow(QMainWindow):
         consol_row.addWidget(consol_label)
         consol_row.addWidget(self.consolidation_spin)
         consol_row.addWidget(self.consolidation_dynamic_chk)
+
+        consol_row.addSpacing(16)
+        self.gemini_batch_chk = QCheckBox(
+            tr("Use Gemini Batch API (50% cost discount)")
+        )
+        self.gemini_batch_chk.toggled.connect(self._on_gemini_batch_toggled)
+        consol_row.addWidget(self.gemini_batch_chk)
+        self._update_gemini_batch_ui()
+
         consol_row.addStretch(1)
         v.addLayout(consol_row)
         return box
@@ -3775,15 +4367,25 @@ class MainWindow(QMainWindow):
             title.setData(Qt.ItemDataRole.UserRole, b["epub_path"])
             self.book_table.setItem(r, 0, title)
             self.book_table.setItem(r, 1, QTableWidgetItem(b.get("author", "")))
-            self.book_table.setItem(
-                r, 2, QTableWidgetItem((b.get("added_date") or "")[:10])
-            )
+            date_item = QTableWidgetItem((b.get("added_date") or "")[:10])
+            date_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            date_item.setFont(QFont("Consolas", 9))
+            self.book_table.setItem(r, 2, date_item)
+
             prog = b.get("progress")
             status = QTableWidgetItem(status_text(prog))
+            palette = md3_theme.get_palette(self._is_dark)
+            status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            status.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
             if prog is not None and prog >= 100:
-                status.setForeground(QColor("#2e7d32"))
+                status.setForeground(QColor(palette.on_success_container))
+                status.setBackground(QColor(palette.success_container))
             elif prog:
-                status.setForeground(QColor("#b58900"))
+                status.setForeground(QColor(palette.on_warning_container))
+                status.setBackground(QColor(palette.warning_container))
+            else:
+                status.setForeground(QColor(palette.on_surface_variant))
+                status.setBackground(QColor(palette.surface_container_high))
             self.book_table.setItem(r, 3, status)
             init_code = (
                 webdav_sync.STATUS_NONE if self._webdav_config().is_configured()
@@ -3976,10 +4578,18 @@ class MainWindow(QMainWindow):
             item = self.book_table.item(r, 0)
             if item and item.data(Qt.ItemDataRole.UserRole) == path:
                 status = QTableWidgetItem(status_text(prog))
+                palette = md3_theme.get_palette(self._is_dark)
+                status.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                status.setFont(QFont("Segoe UI", 9, QFont.Weight.DemiBold))
                 if prog is not None and prog >= 100:
-                    status.setForeground(QColor("#2e7d32"))
+                    status.setForeground(QColor(palette.on_success_container))
+                    status.setBackground(QColor(palette.success_container))
                 elif prog:
-                    status.setForeground(QColor("#b58900"))
+                    status.setForeground(QColor(palette.on_warning_container))
+                    status.setBackground(QColor(palette.warning_container))
+                else:
+                    status.setForeground(QColor(palette.on_surface_variant))
+                    status.setBackground(QColor(palette.surface_container_high))
                 self.book_table.setItem(r, 3, status)
                 break
 
@@ -4018,10 +4628,18 @@ class MainWindow(QMainWindow):
     def _test_device(self) -> None:
         device = self.device_edit.text().strip()
         if not device:
-            self.device_status.setText(tr("Enter a device IP first."))
+            msg = tr("Enter a device IP first.")
+            if hasattr(self, "device_status"):
+                self.device_status.setText(msg)
+            if hasattr(self, "device_config_status"):
+                self.device_config_status.setText(msg)
             return
         ok, msg = test_device(device)
-        self.device_status.setText(("✓ " if ok else "✗ ") + msg)
+        res = ("✓ " if ok else "✗ ") + msg
+        if hasattr(self, "device_status"):
+            self.device_status.setText(res)
+        if hasattr(self, "device_config_status"):
+            self.device_config_status.setText(res)
 
     def _push_selected(self) -> None:
         paths = self._selected_paths()
@@ -4063,15 +4681,21 @@ class MainWindow(QMainWindow):
     def _on_webdav_credentials_edited(self) -> None:
         """Reset WebDAV login state whenever URL/user/password changes."""
         self._webdav_authenticated = False
-        self.webdav_status_label.setText(tr("Not configured."))
+        msg = tr("Not configured.")
+        if hasattr(self, "webdav_status_label"):
+            self.webdav_status_label.setText(msg)
+        if hasattr(self, "transfer_webdav_status"):
+            self.transfer_webdav_status.setText(msg)
 
     def _browse_webdav_folder(self) -> None:
         """Open the WebDAV folder tree browser and update the URL field."""
         cfg = self._webdav_config()
         if not cfg.is_configured():
-            self.webdav_status_label.setText(
-                tr("Enter a WebDAV server URL and credentials before browsing.")
-            )
+            msg = tr("Enter a WebDAV server URL and credentials before browsing.")
+            if hasattr(self, "webdav_status_label"):
+                self.webdav_status_label.setText(msg)
+            if hasattr(self, "transfer_webdav_status"):
+                self.transfer_webdav_status.setText(msg)
             return
         dlg = WebDavFolderDialog(cfg, parent=self)
         if dlg.exec() == QDialog.DialogCode.Accepted:
@@ -4081,13 +4705,25 @@ class MainWindow(QMainWindow):
     def _test_webdav(self) -> None:
         cfg = self._webdav_config()
         if not cfg.is_configured():
-            self.webdav_status_label.setText(tr("Enter a WebDAV server URL first."))
+            msg = tr("Enter a WebDAV server URL first.")
+            if hasattr(self, "webdav_status_label"):
+                self.webdav_status_label.setText(msg)
+            if hasattr(self, "transfer_webdav_status"):
+                self.transfer_webdav_status.setText(msg)
             return
-        self.webdav_status_label.setText(tr("Testing…"))
+        testing_msg = tr("Testing…")
+        if hasattr(self, "webdav_status_label"):
+            self.webdav_status_label.setText(testing_msg)
+        if hasattr(self, "transfer_webdav_status"):
+            self.transfer_webdav_status.setText(testing_msg)
         QApplication.processEvents()
         ok, msg = webdav_sync.test_connection(cfg)
         self._webdav_authenticated = ok
-        self.webdav_status_label.setText(("✓ " if ok else "✗ ") + msg)
+        res = ("✓ " if ok else "✗ ") + msg
+        if hasattr(self, "webdav_status_label"):
+            self.webdav_status_label.setText(res)
+        if hasattr(self, "transfer_webdav_status"):
+            self.transfer_webdav_status.setText(res)
         self._save_prefs()
 
     def _all_paths(self) -> list[str]:
@@ -4305,7 +4941,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, tr("Load failed"), str(e))
             return
         self._result_data = data
-        title = data.get("book_title", tr("Unknown"))
+        title = data.get("book_title") or data.get("book") or tr("Unknown")
         author = data.get("author", "")
         prog = data.get("analysis_progress", 0)
         self.result_title.setText(
@@ -4319,6 +4955,7 @@ class MainWindow(QMainWindow):
             node = QTreeWidgetItem([c.get("name", ""), ""])
             node.setData(0, Qt.ItemDataRole.UserRole, ("character", c))
             chars.addChild(node)
+            node.setFirstColumnSpanned(True)
         self.result_tree.addTopLevelItem(chars)
 
         locs = QTreeWidgetItem([tr("Locations"), str(len(data.get("locations", [])))])
@@ -4326,6 +4963,7 @@ class MainWindow(QMainWindow):
             node = QTreeWidgetItem([loc.get("name", ""), ""])
             node.setData(0, Qt.ItemDataRole.UserRole, ("location", loc))
             locs.addChild(node)
+            node.setFirstColumnSpanned(True)
         self.result_tree.addTopLevelItem(locs)
 
         timeline = QTreeWidgetItem([tr("Timeline"), str(len(data.get("timeline", [])))])
@@ -4334,11 +4972,20 @@ class MainWindow(QMainWindow):
             node = QTreeWidgetItem([str(label)[:60], ""])
             node.setData(0, Qt.ItemDataRole.UserRole, ("event", ev))
             timeline.addChild(node)
+            node.setFirstColumnSpanned(True)
         self.result_tree.addTopLevelItem(timeline)
 
         themes = QTreeWidgetItem([tr("Themes"), str(len(data.get("themes", [])))])
         for t in data.get("themes", []):
-            themes.addChild(QTreeWidgetItem([str(t), ""]))
+            if isinstance(t, dict):
+                theme_name = t.get("name") or t.get("theme") or tr("Theme")
+                node = QTreeWidgetItem([str(theme_name), ""])
+                node.setData(0, Qt.ItemDataRole.UserRole, ("theme", t))
+            else:
+                node = QTreeWidgetItem([str(t), ""])
+                node.setData(0, Qt.ItemDataRole.UserRole, ("theme", {"name": str(t), "description": ""}))
+            themes.addChild(node)
+            node.setFirstColumnSpanned(True)
         self.result_tree.addTopLevelItem(themes)
 
         meta = QTreeWidgetItem([tr("Summary / Author"), ""])
@@ -4349,6 +4996,7 @@ class MainWindow(QMainWindow):
                 "author_bio": data.get("author_bio", ""),
             }),
         )
+        meta.setFirstColumnSpanned(True)
         self.result_tree.addTopLevelItem(meta)
         self.result_tree.expandToDepth(0)
 
@@ -4359,24 +5007,34 @@ class MainWindow(QMainWindow):
             return
         kind, obj = payload
         if kind == "character":
-            lines = [f"# {obj.get('name', '')}", ""]
+            lines = [f"# {obj.get('name', '')}\n"]
             descs = obj.get("descriptions", [])
             if descs:
-                lines.append(descs[-1].get("text", "") if isinstance(descs[-1], dict) else str(descs[-1]))
-            for ev in obj.get("events", []):
-                pct = ev.get("absolute_percent", "?")
-                lines.append(f"  • [{pct}%] {ev.get('event') or ev.get('description') or ''}")
-            self.result_detail.setPlainText("\n".join(lines))
+                desc_text = descs[-1].get("text", "") if isinstance(descs[-1], dict) else str(descs[-1])
+                lines.append(desc_text)
+                lines.append("")
+            events = obj.get("events", [])
+            if events:
+                lines.append(f"### {tr('Events')}\n")
+                for ev in events:
+                    pct = ev.get("absolute_percent", "?")
+                    desc = ev.get("event") or ev.get("description") or ""
+                    lines.append(f"* **[{pct}%]** {desc}")
+            self.result_detail.setMarkdown("\n".join(lines))
         elif kind == "location":
             descs = obj.get("descriptions", [])
             text = descs[-1].get("text", "") if descs and isinstance(descs[-1], dict) else ""
-            self.result_detail.setPlainText(f"# {obj.get('name', '')}\n\n{text}")
+            self.result_detail.setMarkdown(f"# {obj.get('name', '')}\n\n{text}")
+        elif kind == "theme":
+            name = obj.get("name") or obj.get("theme") or tr("Theme")
+            desc = obj.get("description") or obj.get("text") or ""
+            self.result_detail.setMarkdown(f"# {name}\n\n{desc}")
         elif kind == "event":
             self.result_detail.setPlainText(json.dumps(obj, ensure_ascii=False, indent=2))
         elif kind == "summary":
-            self.result_detail.setPlainText(
-                f"# Summary\n\n{obj.get('summary', '')}\n\n"
-                f"# Author\n\n{obj.get('author_bio', '')}"
+            self.result_detail.setMarkdown(
+                f"# {tr('Summary')}\n\n{obj.get('summary', '')}\n\n"
+                f"# {tr('Author')}\n\n{obj.get('author_bio', '')}"
             )
 
     # =============================================================== close
@@ -4403,6 +5061,10 @@ def main() -> None:
     # Block mouse-wheel scrolling from editing spin box / combo box values.
     wheel_guard = _WheelGuard(app)
     app.installEventFilter(wheel_guard)
+    # Apply Google Material Design 3 theme
+    prefs = calibre_browser._load_preferences()
+    is_dark = bool(prefs.get("is_dark", False))
+    md3_theme.apply_theme(app, is_dark)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
