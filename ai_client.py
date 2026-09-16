@@ -59,6 +59,12 @@ GEMINI_API_BASE = "https://generativelanguage.googleapis.com/v1beta/openai/"
 GEMINI_USE_BATCH_API = os.environ.get("GEMINI_USE_BATCH_API", "").lower() in ("1", "true", "yes")
 DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DEEPSEEK_API_BASE = "https://api.deepseek.com"
+ANTIGRAVITY_API_BASE = (
+    os.environ.get("ANTIGRAVITY_API_BASE", "").strip()
+    or "http://127.0.0.1:8045/v1"
+)
+ANTIGRAVITY_API_KEY = os.environ.get("ANTIGRAVITY_API_KEY", "")
+ANTIGRAVITY_MODELS_ENDPOINT = os.environ.get("ANTIGRAVITY_MODELS_ENDPOINT", "")
 COPILOT_API_BASE = copilot_auth.COPILOT_API_BASE
 COPILOT_DEFAULT_MODEL = copilot_auth.COPILOT_DEFAULT_MODEL
 MODELS_ENDPOINT = os.environ.get("XRAY_MODELS_ENDPOINT", "http://localhost:8045/v1/models")
@@ -96,6 +102,7 @@ _openai_models_cache: list[str] | None = None
 _gemini_models_cache: list[str] | None = None
 _deepseek_models_cache: list[str] | None = None
 _copilot_models_cache: list[str] | None = None
+_antigravity_models_cache: list[str] | None = None
 
 
 def _fetch_openai_models() -> list[str]:
@@ -434,6 +441,7 @@ MAX_WORKERS_DEFAULTS: dict[str, int] = {
     "gemini": 3,
     "deepseek": 5,
     "claude": 5,
+    "antigravity": 1,
     "cusanity": 5,
     "_default": 5,
 }
@@ -540,6 +548,47 @@ def fetch_deepseek_models() -> list[str]:
         print(f"  [DeepSeek] Failed to fetch models: {e}")
 
     # No hard-coded fallback: models are always sourced live from the provider.
+    return []
+
+
+def fetch_antigravity_models() -> list[str]:
+    """Fetch models exposed by the local Antigravity OpenAI-compatible proxy."""
+    global _antigravity_models_cache
+    if _antigravity_models_cache is not None:
+        return _antigravity_models_cache
+
+    if not ANTIGRAVITY_API_KEY:
+        return []
+
+    endpoint = ANTIGRAVITY_MODELS_ENDPOINT.strip() or (
+        f"{ANTIGRAVITY_API_BASE.rstrip('/')}/models"
+    )
+    try:
+        import requests
+
+        resp = requests.get(
+            endpoint,
+            headers={"Authorization": f"Bearer {ANTIGRAVITY_API_KEY}"},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        models = sorted(
+            {
+                str(model.get("id", "")).strip()
+                for model in data.get("data", [])
+                if isinstance(model, dict) and str(model.get("id", "")).strip()
+            }
+        )
+        if models:
+            _antigravity_models_cache = models
+            print(
+                f"  [Antigravity] Found {len(models)} models from {endpoint}"
+            )
+            return models
+    except Exception as e:
+        print(f"  [Antigravity] Failed to fetch models from {endpoint}: {e}")
+
     return []
 
 
@@ -1006,6 +1055,19 @@ def create_client(selected_api: str) -> Any:
             timeout=AI_TIMEOUT_SECONDS,
             max_retries=0,  # our retry chain owns retries
         )
+    elif selected_api == "antigravity":
+        if not ANTIGRAVITY_API_KEY:
+            print("Error: ANTIGRAVITY_API_KEY environment variable not set.")
+            return None
+        kwargs: dict[str, Any] = {
+            "base_url": ANTIGRAVITY_API_BASE,
+            "api_key": ANTIGRAVITY_API_KEY,
+            "timeout": AI_TIMEOUT_SECONDS,
+            "max_retries": 0,  # our retry chain owns retries
+        }
+        if API_DEFAULT_HEADERS:
+            kwargs["default_headers"] = API_DEFAULT_HEADERS
+        return OpenAI(**kwargs)
     elif selected_api == "copilot":
         try:
             token = copilot_auth.get_copilot_token(auto_login=True)
@@ -1368,6 +1430,8 @@ def _available_providers() -> set[str]:
         provs.add("gemini")
     if DEEPSEEK_API_KEY:
         provs.add("deepseek")
+    if ANTIGRAVITY_API_KEY and ANTIGRAVITY_API_BASE:
+        provs.add("antigravity")
     if copilot_auth.has_github_token():
         provs.add("copilot")
     return provs
@@ -1551,7 +1615,8 @@ class _ChainRunner:
         client = _client_for(provider)
         if provider == "claude":
             return _call_claude(client, model, self.messages, temperature, max_tokens, _provider=provider)
-        # "openai", "copilot", "groq", "gemini", "deepseek" all use the OpenAI-compatible API.
+        # "openai", "copilot", "groq", "gemini", "deepseek", and
+        # "antigravity" all use the OpenAI-compatible API.
         return _call_openai(
             client, model, self.messages, temperature, max_tokens, timeout, _provider=provider
         )

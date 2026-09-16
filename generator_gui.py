@@ -122,6 +122,7 @@ PROVIDERS: list[tuple[str, str]] = [
     ("groq", "Groq"),
     ("gemini", "Google Gemini"),
     ("deepseek", "DeepSeek"),
+    ("antigravity", "Antigravity"),
 ]
 
 # (env_var, ai_client attribute or None, label, is_secret)
@@ -135,6 +136,18 @@ OPENAI_FIELDS: list[tuple[str, str | None, str, bool]] = [
     ("XRAY_MODELS_ENDPOINT", "MODELS_ENDPOINT", "Models Endpoint", False),
 ]
 
+# Antigravity-Manager exposes an OpenAI-compatible reverse proxy locally.
+ANTIGRAVITY_FIELDS: list[tuple[str, str | None, str, bool]] = [
+    ("ANTIGRAVITY_API_BASE", "ANTIGRAVITY_API_BASE", "Base URL", False),
+    ("ANTIGRAVITY_API_KEY", "ANTIGRAVITY_API_KEY", "API Key", True),
+    (
+        "ANTIGRAVITY_MODELS_ENDPOINT",
+        "ANTIGRAVITY_MODELS_ENDPOINT",
+        "Models Endpoint",
+        False,
+    ),
+]
+
 # Cloud providers only need an API key (their base URLs are fixed).
 CLOUD_KEY_FIELDS: list[tuple[str, str | None, str, bool]] = [
     ("CLAUDE_API_KEY", "CLAUDE_API_KEY", "Claude API Key", True),
@@ -144,7 +157,9 @@ CLOUD_KEY_FIELDS: list[tuple[str, str | None, str, bool]] = [
 ]
 
 # Union kept for the .env load/save and apply loops that iterate every field.
-KEY_FIELDS: list[tuple[str, str | None, str, bool]] = OPENAI_FIELDS + CLOUD_KEY_FIELDS
+KEY_FIELDS: list[tuple[str, str | None, str, bool]] = (
+    OPENAI_FIELDS + ANTIGRAVITY_FIELDS + CLOUD_KEY_FIELDS
+)
 
 # Maps provider key → env-var that holds the API key (excludes openai which is
 # handled via XRAY_API_KEY and may not need one for local endpoints).
@@ -153,6 +168,7 @@ _PROVIDER_KEY_MAPPING: dict[str, str] = {
     "groq": "GROQ_API_KEY",
     "gemini": "GEMINI_API_KEY",
     "deepseek": "DEEPSEEK_API_KEY",
+    "antigravity": "ANTIGRAVITY_API_KEY",
 }
 
 _PROVIDER_ICON_COLORS: dict[str, str] = {
@@ -162,6 +178,7 @@ _PROVIDER_ICON_COLORS: dict[str, str] = {
     "groq": "#a24f9b",
     "gemini": "#2e7d32",
     "deepseek": "#1565c0",
+    "antigravity": "#7b61ff",
 }
 
 _PROVIDER_ICON_TEXT: dict[str, str] = {
@@ -171,6 +188,7 @@ _PROVIDER_ICON_TEXT: dict[str, str] = {
     "groq": "G",
     "gemini": "Ge",
     "deepseek": "D",
+    "antigravity": "A",
 }
 
 _PROVIDER_ICON_CACHE: dict[str, QIcon] = {}
@@ -226,6 +244,8 @@ def fetch_models_for(api: str) -> list[str]:
         return ai_client.fetch_gemini_models()
     if api == "deepseek":
         return ai_client.fetch_deepseek_models()
+    if api == "antigravity":
+        return ai_client.fetch_antigravity_models()
     return list(ai_client.AVAILABLE_MODELS)
 
 
@@ -238,6 +258,7 @@ def reset_model_caches() -> None:
         "_groq_models_cache",
         "_gemini_models_cache",
         "_deepseek_models_cache",
+        "_antigravity_models_cache",
     ):
         if hasattr(ai_client, name):
             setattr(ai_client, name, None)
@@ -1149,11 +1170,19 @@ class _AddModelDialog(QDialog):
         api = self.provider_combo.currentData()
         env_var = _PROVIDER_KEY_MAPPING.get(api, "")
         needs_key = bool(env_var)
-        is_openai = api == "openai"
-        self.base_url_label.setVisible(is_openai)
-        self.base_url_edit.setVisible(is_openai)
-        if is_openai:
-            existing = parent._key_edits.get("XRAY_API_BASE")
+        is_compatible = api in ("openai", "antigravity")
+        base_env_var = (
+            "ANTIGRAVITY_API_BASE" if api == "antigravity" else "XRAY_API_BASE"
+        )
+        self.base_url_label.setVisible(is_compatible)
+        self.base_url_edit.setVisible(is_compatible)
+        if is_compatible:
+            self.base_url_edit.setPlaceholderText(
+                "http://127.0.0.1:8045/v1"
+                if api == "antigravity"
+                else "http://localhost:8080/v1"
+            )
+            existing = parent._key_edits.get(base_env_var)
             self.base_url_edit.setText(existing.text().strip() if existing else "")
         self.api_key_label.setVisible(needs_key)
         self.api_key_edit.setVisible(needs_key)
@@ -1178,8 +1207,12 @@ class _AddModelDialog(QDialog):
         """Copy the entered API key into the parent's key_edits field."""
         parent: "MainWindow" = self.parent()  # type: ignore[assignment]
         api = self.provider_combo.currentData()
-        if api == "openai" and "XRAY_API_BASE" in parent._key_edits:
-            parent._key_edits["XRAY_API_BASE"].setText(self.base_url_edit.text().strip())
+        if api in ("openai", "antigravity"):
+            base_env_var = (
+                "ANTIGRAVITY_API_BASE" if api == "antigravity" else "XRAY_API_BASE"
+            )
+            if base_env_var in parent._key_edits:
+                parent._key_edits[base_env_var].setText(self.base_url_edit.text().strip())
         env_var = _PROVIDER_KEY_MAPPING.get(api, "")
         if env_var and env_var in parent._key_edits:
             key_text = self.api_key_edit.text().strip()
@@ -1494,11 +1527,19 @@ class SetupWizard(QWizard):
 
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
         needs_key = bool(env_var)
-        is_openai = provider == "openai"
-        self.w_base_url_label.setVisible(is_openai)
-        self.w_base_url_edit.setVisible(is_openai)
-        if is_openai:
-            existing = self._parent._key_edits.get("XRAY_API_BASE")
+        is_compatible = provider in ("openai", "antigravity")
+        base_env_var = (
+            "ANTIGRAVITY_API_BASE" if provider == "antigravity" else "XRAY_API_BASE"
+        )
+        self.w_base_url_label.setVisible(is_compatible)
+        self.w_base_url_edit.setVisible(is_compatible)
+        if is_compatible:
+            self.w_base_url_edit.setPlaceholderText(
+                "http://127.0.0.1:8045/v1"
+                if provider == "antigravity"
+                else "http://localhost:8080/v1"
+            )
+            existing = self._parent._key_edits.get(base_env_var)
             self.w_base_url_edit.setText(existing.text().strip() if existing else "")
         self.w_api_key_label.setVisible(needs_key)
         self.w_api_key_edit.setVisible(needs_key)
@@ -1516,10 +1557,14 @@ class SetupWizard(QWizard):
 
     def _wizard_refresh_models(self) -> None:
         provider = self.w_provider_combo.currentData() or "openai"
-        if provider == "openai" and "XRAY_API_BASE" in self._parent._key_edits:
-            self._parent._key_edits["XRAY_API_BASE"].setText(
-                self.w_base_url_edit.text().strip()
+        if provider in ("openai", "antigravity"):
+            base_env_var = (
+                "ANTIGRAVITY_API_BASE" if provider == "antigravity" else "XRAY_API_BASE"
             )
+            if base_env_var in self._parent._key_edits:
+                self._parent._key_edits[base_env_var].setText(
+                    self.w_base_url_edit.text().strip()
+                )
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
         if env_var and env_var in self._parent._key_edits:
             self._parent._key_edits[env_var].setText(self.w_api_key_edit.text().strip())
@@ -1613,10 +1658,14 @@ class SetupWizard(QWizard):
         self._parent.model_combo.setCurrentText(self.w_model_combo.currentText().strip())
 
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
-        if provider == "openai" and "XRAY_API_BASE" in self._parent._key_edits:
-            self._parent._key_edits["XRAY_API_BASE"].setText(
-                self.w_base_url_edit.text().strip()
+        if provider in ("openai", "antigravity"):
+            base_env_var = (
+                "ANTIGRAVITY_API_BASE" if provider == "antigravity" else "XRAY_API_BASE"
             )
+            if base_env_var in self._parent._key_edits:
+                self._parent._key_edits[base_env_var].setText(
+                    self.w_base_url_edit.text().strip()
+                )
         if env_var and env_var in self._parent._key_edits:
             self._parent._key_edits[env_var].setText(self.w_api_key_edit.text().strip())
         if provider == "gemini" and hasattr(self._parent, "gemini_batch_chk"):
@@ -2190,6 +2239,21 @@ class MainWindow(QMainWindow):
         self._headers_edit.setFixedHeight(60)
         oai_form.addRow(f"{tr('Custom Headers')}:", self._headers_edit)
         right_v.addWidget(oai_box)
+
+        # Antigravity-Manager reverse proxy
+        antigravity_box = QGroupBox(tr("Antigravity"))
+        antigravity_box.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        antigravity_form = QFormLayout(antigravity_box)
+        antigravity_form.setContentsMargins(8, 4, 8, 4)
+        antigravity_form.setVerticalSpacing(4)
+        antigravity_form.setHorizontalSpacing(8)
+        for env_var, _attr, label, is_secret in ANTIGRAVITY_FIELDS:
+            self._add_key_row(antigravity_form, env_var, label, is_secret)
+        if not os.environ.get("ANTIGRAVITY_API_BASE"):
+            self._key_edits["ANTIGRAVITY_API_BASE"].setText(
+                ai_client.ANTIGRAVITY_API_BASE
+            )
+        right_v.addWidget(antigravity_box)
         right_v.addStretch(1)
 
         cols.addLayout(left_v, 1)

@@ -34,6 +34,7 @@ VALID_PROVIDERS: tuple[str, ...] = (
     "groq",
     "gemini",
     "deepseek",
+    "antigravity",
     "cusanity",
 )
 

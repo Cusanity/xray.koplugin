@@ -104,6 +104,7 @@ from ai_client import (
     fetch_copilot_models,
     fetch_claude_models,
     fetch_deepseek_models,
+    fetch_antigravity_models,
     fetch_gemini_models,
     fetch_groq_models,
     get_ai_cache,
@@ -914,6 +915,7 @@ def display_api_selector() -> str:
         ("groq", "Groq (Fast Inference)"),
         ("gemini", "Google Gemini (Official)"),
         ("deepseek", "DeepSeek (Official)"),
+        ("antigravity", "Antigravity (Local Proxy)"),
     ]
 
     default_idx = -1
@@ -966,6 +968,8 @@ def display_model_selector(selected_api: str) -> str | None:
         current_models = fetch_gemini_models()
     elif selected_api == "deepseek":
         current_models = fetch_deepseek_models()
+    elif selected_api == "antigravity":
+        current_models = fetch_antigravity_models()
     else:
         current_models = list(AVAILABLE_MODELS)
 
@@ -1723,7 +1727,7 @@ def main() -> None:
 
     # Create client
     client = create_client(selected_api)
-    if selected_api in ("claude", "openai", "copilot", "groq", "gemini", "deepseek") and client is None:
+    if selected_api in ("claude", "openai", "copilot", "groq", "gemini", "deepseek", "antigravity") and client is None:
         return
 
     # First iteration: use CLI path if given, then always show browser

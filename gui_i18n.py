@@ -168,6 +168,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Groq": "Groq",
         "Google Gemini": "Google Gemini",
         "DeepSeek": "DeepSeek",
+        "Antigravity": "Antigravity",
         # Key field labels
         "Base URL": "基础 URL",
         "Base URL:": "基础 URL：",
@@ -613,6 +614,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
         "Groq": "Groq",
         "Google Gemini": "Google Gemini",
         "DeepSeek": "DeepSeek",
+        "Antigravity": "Antigravity",
         "Base URL": "基礎 URL",
         "Base URL:": "基礎 URL：",
         "API Key": "API 金鑰",
