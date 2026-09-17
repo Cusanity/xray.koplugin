@@ -5122,6 +5122,9 @@ class MainWindow(QMainWindow):
 def main() -> None:
     app = QApplication(sys.argv)
     app.setApplicationName("X-Ray Generator")
+    icon_path = os.path.join(_SCRIPT_DIR, "icons", "google_xray.ico")
+    if os.path.exists(icon_path):
+        app.setWindowIcon(QIcon(icon_path))
     # Block mouse-wheel scrolling from editing spin box / combo box values.
     wheel_guard = _WheelGuard(app)
     app.installEventFilter(wheel_guard)
@@ -5130,6 +5133,8 @@ def main() -> None:
     is_dark = bool(prefs.get("is_dark", False))
     md3_theme.apply_theme(app, is_dark)
     window = MainWindow()
+    if os.path.exists(icon_path):
+        window.setWindowIcon(QIcon(icon_path))
     window.show()
     sys.exit(app.exec())
 
