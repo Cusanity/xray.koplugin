@@ -400,7 +400,7 @@ def capture_all() -> None:
     prompt_text = f"""# X-Ray Generator Desktop Application — Independent Sub-Agent UI/UX Design System Audit
 
 ## Target & Scope
-You are an independent Principal Design System Architect & Staff Consumer UX Reviewer (Google MD3 / Material You / Modern Desktop Standards).
+You are an independent Principal Design System Architect & Staff Consumer UX Reviewer (MD3 / Material You / Modern Desktop Standards).
 Your objective in this session is to conduct an uncompromising, pixel-level UI/UX review of the **X-Ray Generator GUI** desktop application across **both PC Desktop (1440 × 900) and Compact Responsive (760 × 600)** viewports, as well as **Light and Dark Material Design 3 Themes**, and all **Modal Dialogs**.
 
 This review operates within an autonomous iterative loop. If ANY visual defect, design system inconsistency, typography flaw, or touch target issue is found, you must output a structured, actionable defect punch-list with exact file references and proposed code diffs so the engineering agent can implement fixes, re-build, re-capture screenshots, and re-present for sign-off until a 100% PASS is achieved.
@@ -481,7 +481,7 @@ Inspect all screenshot files matching `*_PC_*.png` and `*_Mobile_*.png` dynamica
 ### 1. Tonal Surface Stack & Elevation Hierarchy
 - Visual depth must be established through luminance transitions (`surfaceContainerLowest` to `surfaceContainerHighest`).
 - Strict elimination of harsh, high-contrast 1px border lines as the primary element separator.
-- Authentic Google Material Design 3 tonal color roles applied consistently across Light and Dark modes.
+- Authentic Material Design 3 tonal color roles applied consistently across Light and Dark modes.
 
 ### 2. Concentric Nested Radii Math
 - Outer containers must dictate the curvature of inner elements:

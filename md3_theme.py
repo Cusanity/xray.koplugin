@@ -2,7 +2,7 @@
 """
 Material Design 3 (MD3 / Material You) Theme Engine for PyQt6.
 
-Provides Google Material 3 tokens, dynamic light and dark color schemes,
+Provides Material Design 3 (M3) tokens, dynamic light and dark color schemes,
 elevation surfaces, concentric radii, and a comprehensive Qt Style Sheet (QSS)
 for desktop and compact viewports.
 """
@@ -69,7 +69,7 @@ def _ensure_assets() -> dict[str, str]:
 
 @dataclass(frozen=True)
 class MD3Palette:
-    """Google Material Design 3 color tokens."""
+    """Material Design 3 color tokens."""
 
     # Primary brand roles
     primary: str
@@ -229,7 +229,7 @@ def get_palette(is_dark: bool = False) -> MD3Palette:
 
 def generate_stylesheet(is_dark: bool = False) -> str:
     """
-    Generate a full Google Material Design 3 Qt StyleSheet.
+    Generate a full Material Design 3 (MD3) Qt StyleSheet.
 
     Adheres to:
     1. Tonal Surface Stack (no 1px high-contrast divider traps)
@@ -248,7 +248,7 @@ def generate_stylesheet(is_dark: bool = False) -> str:
 
     return f"""
 /* =========================================================================
-   GOOGLE MATERIAL DESIGN 3 - GLOBAL APPLICATION STYLESHEET
+   MATERIAL DESIGN 3 - GLOBAL APPLICATION STYLESHEET
    ========================================================================= */
 
 * {{

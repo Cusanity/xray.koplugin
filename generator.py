@@ -911,10 +911,10 @@ def display_api_selector() -> str:
     options = [
         ("openai", "OpenAI (Standard)"),
         ("copilot", "GitHub Copilot (Device Login)"),
-        ("claude", "Anthropic Claude (Official)"),
+        ("claude", "Anthropic Claude"),
         ("groq", "Groq (Fast Inference)"),
-        ("gemini", "Google Gemini (Official)"),
-        ("deepseek", "DeepSeek (Official)"),
+        ("gemini", "Google Gemini"),
+        ("deepseek", "DeepSeek"),
         ("antigravity", "Antigravity (Local Proxy)"),
     ]
 

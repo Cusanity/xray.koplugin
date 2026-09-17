@@ -13,9 +13,13 @@ import os
 import re
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from openai import OpenAI
+if TYPE_CHECKING:
+    from openai import OpenAI
+    import anthropic
+    from google import genai
+    from google.genai import types as genai_types
 
 import copilot_auth
 import retry_config
@@ -25,17 +29,62 @@ from retry_config import (
     RetryEntry,
 )
 
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
+# -----------------------------------------------------------------------------
+# Lazy SDK Loading (deferred until first API request to achieve instant startup)
+# -----------------------------------------------------------------------------
+_openai_cls = None
+_anthropic_mod = None
+_genai_mod = None
+_genai_types_mod = None
 
-try:
-    from google import genai
-    from google.genai import types as genai_types
-except ImportError:
-    genai = None
-    genai_types = None
+
+def _get_openai() -> Any:
+    global _openai_cls
+    if _openai_cls is None:
+        from openai import OpenAI
+        _openai_cls = OpenAI
+    return _openai_cls
+
+
+def _get_anthropic() -> Any:
+    global _anthropic_mod
+    if _anthropic_mod is None:
+        try:
+            import anthropic
+            _anthropic_mod = anthropic
+        except ImportError:
+            _anthropic_mod = False
+    return _anthropic_mod if _anthropic_mod is not False else None
+
+
+def _get_genai() -> tuple[Any, Any]:
+    global _genai_mod, _genai_types_mod
+    if _genai_mod is None:
+        try:
+            from google import genai
+            from google.genai import types as genai_types
+            _genai_mod = genai
+            _genai_types_mod = genai_types
+        except ImportError:
+            _genai_mod = False
+            _genai_types_mod = False
+    g = _genai_mod if _genai_mod is not False else None
+    gt = _genai_types_mod if _genai_types_mod is not False else None
+    return g, gt
+
+
+def __getattr__(name: str) -> Any:
+    if name == "OpenAI":
+        return _get_openai()
+    elif name == "anthropic":
+        return _get_anthropic()
+    elif name == "genai":
+        g, _ = _get_genai()
+        return g
+    elif name == "genai_types":
+        _, gt = _get_genai()
+        return gt
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 # =============================================================================
 # Configuration (loaded from environment)
@@ -211,6 +260,7 @@ def cancel_active_gemini_batch() -> bool:
     """Cancel the currently active Gemini batch job, if any."""
     with _active_batch_lock:
         job_name = _active_gemini_batch_job_name
+    genai, _ = _get_genai()
     if not job_name or genai is None:
         return False
     try:
@@ -653,6 +703,7 @@ def fetch_gemini_models() -> list[str]:
 
 def get_gemini_genai_client() -> Any:
     """Return a google.genai.Client instance using GEMINI_API_KEY."""
+    genai, _ = _get_genai()
     if genai is None:
         raise RuntimeError(
             "google-genai module not found. Please install it: pip install google-genai"
@@ -675,6 +726,9 @@ def submit_gemini_batch_chunks(
     Returns the created BatchJob object.
     """
     client = get_gemini_genai_client()
+    _, genai_types = _get_genai()
+    if genai_types is None:
+        raise RuntimeError("google-genai module not found.")
     model_id = model.removeprefix("models/") if model else "gemini-2.5-flash-lite"
 
     total_chars = sum(len(t.get("prompt", "")) for t in chunk_tasks)
@@ -911,6 +965,7 @@ def fetch_claude_models() -> list[str]:
     if _claude_models_cache is not None:
         return _claude_models_cache
 
+    anthropic = _get_anthropic()
     if not CLAUDE_API_KEY or anthropic is None:
         return []
 
@@ -1010,7 +1065,9 @@ def fetch_copilot_models() -> list[str]:
 
 def create_client(selected_api: str) -> Any:
     """Create the appropriate AI client for the selected API."""
+    openai_cls = _get_openai()
     if selected_api == "claude":
+        anthropic = _get_anthropic()
         if anthropic is None:
             print("Error: anthropic module not found. Please install it.")
             return None
@@ -1029,7 +1086,7 @@ def create_client(selected_api: str) -> Any:
         if not GROQ_API_KEY:
             print("Error: GROQ_API_KEY environment variable not set.")
             return None
-        return OpenAI(
+        return openai_cls(
             base_url=GROQ_API_BASE,
             api_key=GROQ_API_KEY,
             timeout=AI_TIMEOUT_SECONDS,
@@ -1039,7 +1096,7 @@ def create_client(selected_api: str) -> Any:
         if not GEMINI_API_KEY:
             print("Error: GEMINI_API_KEY environment variable not set.")
             return None
-        return OpenAI(
+        return openai_cls(
             base_url=GEMINI_API_BASE,
             api_key=GEMINI_API_KEY,
             timeout=AI_TIMEOUT_SECONDS,
@@ -1049,7 +1106,7 @@ def create_client(selected_api: str) -> Any:
         if not DEEPSEEK_API_KEY:
             print("Error: DEEPSEEK_API_KEY environment variable not set.")
             return None
-        return OpenAI(
+        return openai_cls(
             base_url=DEEPSEEK_API_BASE,
             api_key=DEEPSEEK_API_KEY,
             timeout=AI_TIMEOUT_SECONDS,
@@ -1067,14 +1124,14 @@ def create_client(selected_api: str) -> Any:
         }
         if API_DEFAULT_HEADERS:
             kwargs["default_headers"] = API_DEFAULT_HEADERS
-        return OpenAI(**kwargs)
+        return openai_cls(**kwargs)
     elif selected_api == "copilot":
         try:
             token = copilot_auth.get_copilot_token(auto_login=True)
         except Exception as e:
             print(f"Error: GitHub Copilot login failed: {e}")
             return None
-        return OpenAI(
+        return openai_cls(
             base_url=COPILOT_API_BASE,
             api_key=token,
             timeout=AI_TIMEOUT_SECONDS,
@@ -1092,7 +1149,7 @@ def create_client(selected_api: str) -> Any:
         }
         if API_DEFAULT_HEADERS:
             kwargs["default_headers"] = API_DEFAULT_HEADERS
-        return OpenAI(**kwargs)
+        return openai_cls(**kwargs)
     return None
 
 
@@ -1332,6 +1389,7 @@ def _call_claude(
     _provider: str = "claude",
 ) -> str:
     """Call Anthropic Claude and return raw response content."""
+    anthropic = _get_anthropic()
     if anthropic is None:
         raise ValueError("anthropic module is not available")
     if not isinstance(client, anthropic.Anthropic):
@@ -1422,6 +1480,7 @@ def _call_openai(
 def _available_providers() -> set[str]:
     """Return the set of providers that currently have usable credentials."""
     provs: set[str] = {"openai", "cusanity"}
+    anthropic = _get_anthropic()
     if CLAUDE_API_KEY and anthropic is not None:
         provs.add("claude")
     if GROQ_API_KEY:

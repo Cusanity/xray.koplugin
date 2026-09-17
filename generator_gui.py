@@ -55,8 +55,20 @@ try:
 except ImportError:
     pass
 
-from PyQt6.QtCore import QEvent, QObject, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QDesktopServices, QFont, QFontMetrics, QIcon, QPainter, QPixmap, QTextCursor
+from PyQt6.QtCore import QEvent, QObject, QRect, QRectF, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import (
+    QAction,
+    QColor,
+    QDesktopServices,
+    QFont,
+    QFontMetrics,
+    QIcon,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QTextCursor,
+)
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QAbstractScrollArea,
@@ -87,6 +99,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSplitter,
     QSpinBox,
+    QSplashScreen,
     QStackedWidget,
     QTabWidget,
     QTableWidget,
@@ -103,12 +116,10 @@ from PyQt6.QtWidgets import (
 import ai_client
 import calibre_browser
 import copilot_auth
-import generator
 import md3_theme
 import retry_config
 import webdav_sync
 from retry_config import RetryChain, RetryChainOptions, RetryEntry
-from epub_reader import get_sdr_name, rebuild_toc_ncx
 from gui_i18n import AVAILABLE_LANGUAGES, tr
 
 # =============================================================================
@@ -205,10 +216,33 @@ _BEIJING_TZ = timezone(timedelta(hours=8))
 # =============================================================================
 
 
+def get_xray_base_dir() -> str:
+    """Return the root directory where X-Ray data folders are stored.
+
+    Can be overridden by setting XRAY_OUTPUT_DIR in the environment or .env.
+    Falls back to <user_dir>/xray.
+    """
+    override = os.environ.get("XRAY_OUTPUT_DIR", "").strip()
+    if override:
+        return override
+    base = (
+        os.path.dirname(sys.executable)
+        if getattr(sys, "frozen", False)
+        else os.path.dirname(os.path.abspath(__file__))
+    )
+    return os.path.join(base, "xray")
+
+
+def _get_generator() -> Any:
+    import generator
+    return generator
+
+
 def output_json_path(epub_path: str) -> str:
     """Return the path where a book's xray_data.json lives."""
+    from epub_reader import get_sdr_name
     sdr = get_sdr_name(epub_path)
-    return os.path.join(generator.get_xray_base_dir(), sdr, "xray_analysis", "xray_data.json")
+    return os.path.join(get_xray_base_dir(), sdr, "xray_analysis", "xray_data.json")
 
 
 def read_progress(json_path: str) -> int | None:
@@ -737,9 +771,12 @@ class ProcessWorker(QObject):
     def stop(self) -> None:
         self._stop = True
         ai_client.cancel_active_gemini_batch()
-        generator.request_stop()
+        _get_generator().request_stop()
 
     def run(self) -> None:
+        import generator
+        from epub_reader import get_sdr_name
+
         generator.set_gui_hooks(progress_hook=self.progress.emit, fatal_raises=True)
         old_stdout = sys.stdout
         sys.stdout = _StdoutRedirector(self.log.emit)
@@ -910,6 +947,7 @@ class WebDavStatusWorker(QObject):
         self._paths = paths
 
     def run(self) -> None:
+        from epub_reader import get_sdr_name
         for path in self._paths:
             try:
                 code = webdav_sync.book_status(
@@ -937,6 +975,7 @@ class WebDavOpWorker(QObject):
         self._op = op  # "upload" | "download"
 
     def run(self) -> None:
+        from epub_reader import get_sdr_name
         for path in self._paths:
             sdr = get_sdr_name(path)
             jp = output_json_path(path)
@@ -1606,7 +1645,7 @@ class SetupWizard(QWizard):
         d = QFileDialog.getExistingDirectory(
             self,
             tr("Select X-Ray Output Folder"),
-            self.w_output_edit.text() or generator.get_xray_base_dir(),
+            self.w_output_edit.text() or get_xray_base_dir(),
         )
         if d:
             self.w_output_edit.setText(d)
@@ -2451,7 +2490,7 @@ class MainWindow(QMainWindow):
         self.temp_spin = QDoubleSpinBox()
         self.temp_spin.setRange(0.0, 2.0)
         self.temp_spin.setSingleStep(0.1)
-        self.temp_spin.setValue(float(getattr(generator, "TEMPERATURE", 0.4)))
+        self.temp_spin.setValue(float(getattr(ai_client, "TEMPERATURE", 0.4)))
         self.temp_spin.setMaximumWidth(120)
         misc_form.addRow(tr("Temperature:"), self.temp_spin)
 
@@ -3054,7 +3093,8 @@ class MainWindow(QMainWindow):
         self.chain_table.setFixedHeight(provider_row_height() * 3 + 34)
         v.addWidget(self.chain_table)
 
-        self._start_chain_price_fetch()
+        # Defer price fetching so startup finishes instantly without network/thread overhead
+        QTimer.singleShot(600, self._start_chain_price_fetch)
 
         # Row controls & options.
         row_btns = QHBoxLayout()
@@ -3531,7 +3571,6 @@ class MainWindow(QMainWindow):
 
     def _on_gemini_batch_toggled(self, checked: bool) -> None:
         ai_client.set_gemini_batch_enabled(checked)
-        generator.set_use_gemini_batch(checked)
         self._prefs["gemini_batch_api"] = checked
 
     def _update_gemini_batch_ui(self) -> None:
@@ -3766,7 +3805,6 @@ class MainWindow(QMainWindow):
             use_batch = bool(self._prefs.get("gemini_batch_api", False))
             self.gemini_batch_chk.setChecked(use_batch)
             ai_client.set_gemini_batch_enabled(use_batch)
-            generator.set_use_gemini_batch(use_batch)
         self._update_gemini_batch_ui()
 
     def _open_setup_wizard(self) -> None:
@@ -3959,16 +3997,16 @@ class MainWindow(QMainWindow):
         ai_client.API_DEFAULT_HEADERS = ai_client.parse_headers(raw_headers)
         lib = self.calibre_edit.text().strip()
         os.environ["CALIBRE_LIBRARY"] = lib
-        generator.CALIBRE_LIBRARY = lib
+        _get_generator().CALIBRE_LIBRARY = lib
         xray_out = self.xray_output_edit.text().strip()
         os.environ["XRAY_OUTPUT_DIR"] = xray_out
         temp = float(self.temp_spin.value())
         ai_client.TEMPERATURE = temp
-        generator.TEMPERATURE = temp
+        _get_generator().TEMPERATURE = temp
         if hasattr(self, "gemini_batch_chk"):
             use_batch = self.gemini_batch_chk.isChecked()
             ai_client.set_gemini_batch_enabled(use_batch)
-            generator.set_use_gemini_batch(use_batch)
+            _get_generator().set_use_gemini_batch(use_batch)
             self._prefs["gemini_batch_api"] = use_batch
         # Push per-provider concurrency / chunk-size overrides into the backend.
         workers, chunk = self._limits_from_ui()
@@ -4057,7 +4095,7 @@ class MainWindow(QMainWindow):
     def _browse_xray_output(self) -> None:
         d = QFileDialog.getExistingDirectory(
             self, tr("Select X-Ray Output Folder"),
-            self.xray_output_edit.text() or generator.get_xray_base_dir(),
+            self.xray_output_edit.text() or get_xray_base_dir(),
         )
         if d:
             self.xray_output_edit.setText(d)
@@ -4372,6 +4410,8 @@ class MainWindow(QMainWindow):
         )
         QApplication.processEvents()
         fixed = 0
+        from epub_reader import rebuild_toc_ncx
+
         for path in paths:
             try:
                 if rebuild_toc_ncx(path):
@@ -4721,7 +4761,7 @@ class MainWindow(QMainWindow):
                 old = sys.stdout
                 sys.stdout = _StdoutRedirector(self._append_log)
                 try:
-                    generator.push_to_koreader(jp, device)
+                    _get_generator().push_to_koreader(jp, device)
                 finally:
                     sys.stdout = old
             else:
@@ -4866,9 +4906,10 @@ class MainWindow(QMainWindow):
                 self, tr("No selection"), tr("Select a book in the Books tab.")
             )
             return
+        from epub_reader import get_sdr_name
         for path in paths:
             sdr = get_sdr_name(path)
-            folder = os.path.join(generator.get_xray_base_dir(), sdr)
+            folder = os.path.join(get_xray_base_dir(), sdr)
             os.makedirs(folder, exist_ok=True)
             QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
 
@@ -4980,7 +5021,7 @@ class MainWindow(QMainWindow):
     def _open_result_file(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, tr("Open xray_data.json"),
-            generator.get_xray_base_dir(), tr("JSON files (*.json)"),
+            get_xray_base_dir(), tr("JSON files (*.json)"),
         )
         if path:
             self._load_result(path)
@@ -5119,31 +5160,84 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _create_splash_screen(is_dark: bool) -> QSplashScreen:
+    width, height = 300, 160
+    pixmap = QPixmap(width, height)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    # Rounded card container
+    bg_color = QColor("#1e1f20") if is_dark else QColor("#ffffff")
+    border_color = QColor("#444746") if is_dark else QColor("#dadce0")
+    text_color = QColor("#e3e3e3") if is_dark else QColor("#1f1f1f")
+    sub_color = QColor("#8e918f") if is_dark else QColor("#747775")
+
+    rect = QRectF(0.5, 0.5, width - 1, height - 1)
+    path = QPainterPath()
+    path.addRoundedRect(rect, 16, 16)
+    painter.fillPath(path, bg_color)
+    painter.setPen(QPen(border_color, 1))
+    painter.drawPath(path)
+
+    # Application icon
+    icon_path = os.path.join(_SCRIPT_DIR, "icons", "xray.png")
+    if os.path.exists(icon_path):
+        icon_pixmap = QPixmap(icon_path).scaled(
+            56, 56, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+        )
+        painter.drawPixmap(int((width - 56) / 2), 22, icon_pixmap)
+
+    # Title
+    font = QFont("Segoe UI", 12, QFont.Weight.DemiBold)
+    painter.setFont(font)
+    painter.setPen(text_color)
+    painter.drawText(QRect(0, 88, width, 24), Qt.AlignmentFlag.AlignCenter, tr("X-Ray Generator"))
+
+    # Subtitle
+    sub_font = QFont("Segoe UI", 9)
+    painter.setFont(sub_font)
+    painter.setPen(sub_color)
+    painter.drawText(QRect(0, 114, width, 20), Qt.AlignmentFlag.AlignCenter, tr("KOReader Plugin"))
+
+    painter.end()
+
+    return QSplashScreen(pixmap, Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.FramelessWindowHint)
+
+
 def main() -> None:
     if sys.platform == "win32":
         try:
             import ctypes
             # Explicit AppUserModelID ensures Windows taskbar displays the app's icon
             # instead of grouping under generic python.exe / pythonw.exe.
-            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("google.xray.generator")
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("koreader.xray.generator")
         except Exception:
             pass
     app = QApplication(sys.argv)
     app.setApplicationName("X-Ray Generator")
-    icon_path = os.path.join(_SCRIPT_DIR, "icons", "google_xray.ico")
+    icon_path = os.path.join(_SCRIPT_DIR, "icons", "xray.ico")
     if os.path.exists(icon_path):
         app.setWindowIcon(QIcon(icon_path))
+
+    # Fast splash screen for sub-100ms visual response
+    prefs = calibre_browser._load_preferences()
+    is_dark = bool(prefs.get("is_dark", False))
+    splash = _create_splash_screen(is_dark)
+    splash.show()
+    app.processEvents()
+
     # Block mouse-wheel scrolling from editing spin box / combo box values.
     wheel_guard = _WheelGuard(app)
     app.installEventFilter(wheel_guard)
-    # Apply Google Material Design 3 theme
-    prefs = calibre_browser._load_preferences()
-    is_dark = bool(prefs.get("is_dark", False))
+    # Apply Material Design 3 theme
     md3_theme.apply_theme(app, is_dark)
     window = MainWindow()
     if os.path.exists(icon_path):
         window.setWindowIcon(QIcon(icon_path))
     window.show()
+    splash.finish(window)
     sys.exit(app.exec())
 
 

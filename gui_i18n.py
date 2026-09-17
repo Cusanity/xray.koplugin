@@ -58,6 +58,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     "zh": {
         # App / window / tabs
         "X-Ray Generator": "X-Ray 生成器",
+        "KOReader Plugin": "KOReader 插件",
         "Configuration": "配置",
         "Books": "书籍",
         "Progress": "进度",
@@ -506,6 +507,7 @@ _TRANSLATIONS: dict[str, dict[str, str]] = {
     # ---------------------------------------------------------------- 繁體中文
     "zh_TW": {
         "X-Ray Generator": "X-Ray 產生器",
+        "KOReader Plugin": "KOReader 外掛",
         "Configuration": "設定",
         "Books": "書籍",
         "Progress": "進度",
