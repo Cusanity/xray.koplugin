@@ -3875,15 +3875,24 @@ class MainWindow(QMainWindow):
         def _ps_quote(value: str) -> str:
             return value.replace("'", "''")
 
-        ps_script = (
-            "$w = New-Object -ComObject WScript.Shell\n"
-            f"$s = $w.CreateShortcut('{_ps_quote(shortcut_path)}')\n"
-            f"$s.TargetPath = '{_ps_quote(target_path)}'\n"
-            f"$s.Arguments = '{_ps_quote(arguments)}'\n"
-            f"$s.WorkingDirectory = '{_ps_quote(working_dir)}'\n"
-            "$s.Description = 'KOReader X-Ray Generator GUI'\n"
-            "$s.Save()\n"
-        )
+        icon_path = os.path.join(_SCRIPT_DIR, "icons", "xray.ico")
+        if not os.path.isfile(icon_path):
+            bundle_icon = os.path.join(_BUNDLE_DIR, "icons", "xray.ico")
+            if os.path.isfile(bundle_icon):
+                icon_path = bundle_icon
+
+        ps_lines = [
+            "$w = New-Object -ComObject WScript.Shell",
+            f"$s = $w.CreateShortcut('{_ps_quote(shortcut_path)}')",
+            f"$s.TargetPath = '{_ps_quote(target_path)}'",
+            f"$s.Arguments = '{_ps_quote(arguments)}'",
+            f"$s.WorkingDirectory = '{_ps_quote(working_dir)}'",
+            "$s.Description = 'KOReader X-Ray Generator GUI'",
+        ]
+        if os.path.isfile(icon_path):
+            ps_lines.append(f"$s.IconLocation = '{_ps_quote(icon_path)},0'")
+        ps_lines.append("$s.Save()\n")
+        ps_script = "\n".join(ps_lines)
 
         try:
             subprocess.run(
