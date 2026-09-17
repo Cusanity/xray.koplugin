@@ -5120,6 +5120,14 @@ class MainWindow(QMainWindow):
 
 
 def main() -> None:
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            # Explicit AppUserModelID ensures Windows taskbar displays the app's icon
+            # instead of grouping under generic python.exe / pythonw.exe.
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("google.xray.generator")
+        except Exception:
+            pass
     app = QApplication(sys.argv)
     app.setApplicationName("X-Ray Generator")
     icon_path = os.path.join(_SCRIPT_DIR, "icons", "google_xray.ico")
