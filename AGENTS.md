@@ -89,6 +89,35 @@ Rules:
 - Keep `gui_i18n.py` (Python GUI) and the `languages/*.po` files (Lua plugin) as **separate**
   systems; do not try to share keys between them.
 
+### GUI Settings Persistence (Python tooling, `generator_gui.py`)
+
+The desktop GUI operates on a **two-layer persistence architecture**:
+
+1. **`.env` (Canonical store for backend and CLI)**:
+   - Contains API credentials, base URLs, endpoints, and CLI settings:
+     `ANTIGRAVITY_API_KEY`, `ANTIGRAVITY_API_BASE`, `ANTIGRAVITY_MODELS_ENDPOINT`,
+     `CLAUDE_API_KEY`, `GROQ_API_KEY`, `GEMINI_API_KEY`, `DEEPSEEK_API_KEY`,
+     `XRAY_API_KEY`, `XRAY_API_BASE`, `XRAY_MODELS_ENDPOINT`, `XRAY_API_HEADERS`,
+     `CALIBRE_LIBRARY`, `XRAY_OUTPUT_DIR`, `XRAY_MODEL`, `GEMINI_USE_BATCH_API`.
+   - Used directly by `ai_client.py`, `generator.py`, and `generator_gui.py` (`load_dotenv` with `override=True`).
+   - `_save_env()` updates `.env` in-place to preserve user comments and unmanaged custom variables.
+
+2. **`.xray_prefs.json` (via `calibre_browser._save_preferences`)**:
+   - Contains UI state, retry chain configurations, limits, and sync options:
+     `last_api`, `last_model`, `device`, `auto_push`, `webdav_*`, `temperature`,
+     `gui_lang`, `is_dark`, `retry_chain`, `retry_chain_options`, `max_workers`,
+     `max_chunk_size`, `consolidation_batch_*`.
+   - Also retains an `api_keys` dictionary as a resilient fallback if `.env` is absent or read-only.
+
+**Rules for Settings Persistence**:
+- **Atomic dual persistence**: Whenever settings are applied or modified in the GUI, **both** `.env` and `.xray_prefs.json` must be persisted.
+  - `_apply_config()` must always call `self._save_env(show_status=False)` alongside `self._save_prefs()`.
+  - `SetupWizard.apply_to_parent()` must synchronize the retry chain's primary entry and call `_apply_config()`.
+  - `_open_add_model_dialog()` must call `self._apply_config()` upon accepting a new provider/model.
+  - `closeEvent()` must call `self._apply_config()` so closing the application never loses unsaved field edits.
+  - `_add_key_row()` must fall back to `self._prefs.get("api_keys", {}).get(env_var, "")` if `os.environ` is empty.
+  - Any new credential added to `KEY_FIELDS` or `_PROVIDER_KEY_MAPPING` must be wired into `_save_env`, `_apply_config`, and `_add_key_row`.
+
 ### PC side (Python batch generator)
 - `generator.py` — entry point / orchestration for off-device generation.
   Exposes optional GUI hooks: `set_gui_hooks(progress_hook, fatal_raises)`, `FatalChunkError`,
@@ -156,3 +185,7 @@ When editing Python generator tooling (`generator.py`, `generator_gui.py`, `gui_
    This script uses AST-based analysis to verify every `tr("key")` call has a
    matching entry in every language dict in `gui_i18n.py`, and flags f-strings
    passed to Qt text methods without `tr()`. Exit 0 = clean.
+4. **Preserve dual settings persistence.** When adding or modifying settings or API
+   credentials in the GUI, ensure they are saved to both `.env` (via `_save_env` in-place
+   update) and `.xray_prefs.json` (via `_save_prefs`), wired into `_apply_config()`, and
+   loaded with fallback in `_add_key_row()`. Never rely solely on in-memory state.

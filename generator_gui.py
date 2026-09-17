@@ -51,7 +51,7 @@ if _SCRIPT_DIR not in sys.path:
 try:
     from dotenv import load_dotenv
 
-    load_dotenv(os.path.join(_SCRIPT_DIR, ".env"))
+    load_dotenv(os.path.join(_SCRIPT_DIR, ".env"), override=True)
 except ImportError:
     pass
 
@@ -1691,10 +1691,21 @@ class SetupWizard(QWizard):
 
     def apply_to_parent(self) -> None:
         provider = self.w_provider_combo.currentData() or "openai"
+        model = self.w_model_combo.currentText().strip()
         provider_idx = self._parent.provider_combo.findData(provider)
         if provider_idx >= 0:
             self._parent.provider_combo.setCurrentIndex(provider_idx)
-        self._parent.model_combo.setCurrentText(self.w_model_combo.currentText().strip())
+        self._parent.model_combo.setCurrentText(model)
+
+        rows = self._parent._chain_rows()
+        if rows:
+            rows[0].provider = provider
+            rows[0].model = model
+            self._parent._populate_chain_table(
+                RetryChain(entries=rows, options=self._parent._chain_options_from_ui())
+            )
+        else:
+            self._parent._chain_add_row(provider=provider, model=model)
 
         env_var = _PROVIDER_KEY_MAPPING.get(provider, "")
         if provider in ("openai", "antigravity"):
@@ -2171,7 +2182,10 @@ class MainWindow(QMainWindow):
     ) -> None:
         """Add one key/endpoint line-edit row to a form, tracking it for save."""
         edit = QLineEdit()
-        edit.setText(os.environ.get(env_var, ""))
+        val = os.environ.get(env_var, "")
+        if not val and hasattr(self, "_prefs"):
+            val = self._prefs.get("api_keys", {}).get(env_var, "")
+        edit.setText(val)
         self._key_edits[env_var] = edit
         if is_secret:
             edit.setEchoMode(QLineEdit.EchoMode.Password)
@@ -2288,7 +2302,7 @@ class MainWindow(QMainWindow):
         antigravity_form.setHorizontalSpacing(8)
         for env_var, _attr, label, is_secret in ANTIGRAVITY_FIELDS:
             self._add_key_row(antigravity_form, env_var, label, is_secret)
-        if not os.environ.get("ANTIGRAVITY_API_BASE"):
+        if not self._key_edits["ANTIGRAVITY_API_BASE"].text().strip():
             self._key_edits["ANTIGRAVITY_API_BASE"].setText(
                 ai_client.ANTIGRAVITY_API_BASE
             )
@@ -3392,6 +3406,7 @@ class MainWindow(QMainWindow):
             self.model_combo.setEditText(model)
             self._chain_add_row(provider=provider, model=model)
             self.chain_table.selectRow(self.chain_table.rowCount() - 1)
+            self._apply_config()
 
     def _chain_add_current(self) -> None:
         provider = self.provider_combo.currentData() or "openai"
@@ -3981,6 +3996,11 @@ class MainWindow(QMainWindow):
                 "max_chunk_size": chunk,
                 "consolidation_batch_size": self.consolidation_spin.value(),
                 "consolidation_batch_dynamic": self.consolidation_dynamic_chk.isChecked(),
+                "api_keys": {
+                    env_var: self._key_edits[env_var].text().strip()
+                    for env_var, _attr, _label, _secret in KEY_FIELDS
+                    if env_var in self._key_edits
+                },
             }
         )
         calibre_browser._save_preferences(self._prefs)
@@ -3993,13 +4013,14 @@ class MainWindow(QMainWindow):
             tr("Language changed. Restart the app to apply."), 6000
         )
 
-    def _apply_config(self) -> None:
+    def _apply_config(self, save_env: bool = True) -> None:
         """Push the UI's key/endpoint values into the backend modules."""
         for env_var, attr, _label, _secret in KEY_FIELDS:
-            val = self._key_edits[env_var].text().strip()
-            os.environ[env_var] = val
-            if attr:
-                setattr(ai_client, attr, val)
+            if env_var in self._key_edits:
+                val = self._key_edits[env_var].text().strip()
+                os.environ[env_var] = val
+                if attr:
+                    setattr(ai_client, attr, val)
         # OpenAI-compatible custom headers (parsed from JSON or Key: Value lines).
         raw_headers = self._headers_edit.toPlainText().strip()
         os.environ["XRAY_API_HEADERS"] = raw_headers
@@ -4026,6 +4047,9 @@ class MainWindow(QMainWindow):
             consolidate_batch_dynamic=self.consolidation_dynamic_chk.isChecked(),
         )
         self._save_prefs()
+        if save_env:
+            self._save_env(show_status=False)
+        self._on_provider_changed()
         self.statusBar().showMessage(tr("Settings applied."), 4000)
 
     def _load_env(self) -> None:
@@ -4054,6 +4078,8 @@ class MainWindow(QMainWindow):
                         self.calibre_edit.setText(value)
                     elif key == "XRAY_OUTPUT_DIR":
                         self.xray_output_edit.setText(value)
+                    elif key == "XRAY_MODEL":
+                        self.model_combo.setEditText(value)
                     elif key == "GEMINI_USE_BATCH_API":
                         val = value.lower() in ("1", "true", "yes", "on")
                         if hasattr(self, "gemini_batch_chk"):
@@ -4061,38 +4087,83 @@ class MainWindow(QMainWindow):
         except OSError as e:
             QMessageBox.warning(self, tr("Load .env failed"), str(e))
             return
+        self._apply_config(save_env=False)
         self.statusBar().showMessage(tr("Loaded settings from .env"), 4000)
 
-    def _save_env(self) -> None:
+    def _save_env(self, show_status: bool = True) -> None:
         path = os.path.join(_SCRIPT_DIR, ".env")
-        lines = ["# X-Ray Generator Configuration (written by GUI)"]
+        managed_values: dict[str, str] = {}
         for env_var, _attr, _label, _secret in KEY_FIELDS:
-            lines.append(f"{env_var}={self._key_edits[env_var].text().strip()}")
+            edit = self._key_edits.get(env_var)
+            managed_values[env_var] = (
+                edit.text().strip() if edit else os.environ.get(env_var, "")
+            )
         raw_headers = self._headers_edit.toPlainText().strip()
         if raw_headers:
-            lines.append(
-                f"XRAY_API_HEADERS={json.dumps(ai_client.parse_headers(raw_headers))}"
+            managed_values["XRAY_API_HEADERS"] = json.dumps(
+                ai_client.parse_headers(raw_headers)
             )
-        lines.append(f"CALIBRE_LIBRARY={self.calibre_edit.text().strip()}")
-        xray_out = self.xray_output_edit.text().strip()
-        if xray_out:
-            lines.append(f"XRAY_OUTPUT_DIR={xray_out}")
-        model = self.model_combo.currentText().strip()
-        if model:
-            lines.append(f"XRAY_MODEL={model}")
+        else:
+            managed_values["XRAY_API_HEADERS"] = ""
+        managed_values["CALIBRE_LIBRARY"] = self.calibre_edit.text().strip()
+        managed_values["XRAY_OUTPUT_DIR"] = self.xray_output_edit.text().strip()
+        chain = self._chain_from_ui()
+        primary = chain.primary
+        model = primary.model if primary else self.model_combo.currentText().strip()
+        managed_values["XRAY_MODEL"] = model
         if hasattr(self, "gemini_batch_chk"):
-            lines.append(
-                f"GEMINI_USE_BATCH_API={'true' if self.gemini_batch_chk.isChecked() else 'false'}"
+            managed_values["GEMINI_USE_BATCH_API"] = (
+                "true" if self.gemini_batch_chk.isChecked() else "false"
             )
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
-        except OSError as e:
-            QMessageBox.warning(self, tr("Save .env failed"), str(e))
-            return
-        self.statusBar().showMessage(
-            tr("Saved settings to {path}").format(path=path), 5000
-        )
+
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    existing_lines = f.readlines()
+                written_keys: set[str] = set()
+                new_lines: list[str] = []
+                for line in existing_lines:
+                    stripped = line.strip()
+                    if stripped and not stripped.startswith("#") and "=" in stripped:
+                        k, _, _ = stripped.partition("=")
+                        k = k.strip()
+                        if k in managed_values:
+                            new_lines.append(f"{k}={managed_values[k]}\n")
+                            written_keys.add(k)
+                            continue
+                    new_lines.append(line)
+                for k, v in managed_values.items():
+                    if k not in written_keys:
+                        new_lines.append(f"{k}={v}\n")
+                with open(path, "w", encoding="utf-8") as f:
+                    f.writelines(new_lines)
+            except OSError as e:
+                QMessageBox.warning(self, tr("Save .env failed"), str(e))
+                return
+        else:
+            lines = ["# X-Ray Generator Configuration (written by GUI)"]
+            for k, v in managed_values.items():
+                if v or k in (
+                    "XRAY_API_BASE",
+                    "XRAY_API_KEY",
+                    "ANTIGRAVITY_API_BASE",
+                    "ANTIGRAVITY_API_KEY",
+                    "CALIBRE_LIBRARY",
+                    "XRAY_MODEL",
+                ):
+                    lines.append(f"{k}={v}")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("\n".join(lines) + "\n")
+            except OSError as e:
+                QMessageBox.warning(self, tr("Save .env failed"), str(e))
+                return
+
+        self._save_prefs()
+        if show_status:
+            self.statusBar().showMessage(
+                tr("Saved settings to {path}").format(path=path), 5000
+            )
 
     def _browse_calibre(self) -> None:
         d = QFileDialog.getExistingDirectory(
@@ -5165,7 +5236,7 @@ class MainWindow(QMainWindow):
                 self._proc_worker.stop()
             self._proc_thread.quit()
             self._proc_thread.wait(3000)
-        self._save_prefs()
+        self._apply_config()
         event.accept()
 
 
